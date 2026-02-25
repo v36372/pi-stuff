@@ -9,6 +9,9 @@ Usage:
     [--base-branch <main>] \
     [--max-respawns <n>] \
     [--merge-method <merge|squash|rebase>] \
+    [--pr-open-sla-minutes <n>] \
+    [--pr-open-max-nudges <n>] \
+    [--followup-cooldown-minutes <n>] \
     [--dry-run]
 
 Checks active orchestrator tasks deterministically:
@@ -24,6 +27,8 @@ Loop behavior after PR creation:
 - Send follow-up prompt to subagent when CI fails or critical AI review feedback appears
 - Notify human review only after CI + AI review gates pass
 - Merge only after human approval, then close tmux session
+- Escalate when PR is not created within SLA and nudge subagent before human escalation
+- Deduplicate/cooldown follow-up prompts to avoid spam
 EOF
 }
 
@@ -55,6 +60,50 @@ send_prompt_to_tmux() {
   tmux paste-buffer -b "$buffer_name" -t "$session"
   tmux send-keys -t "$session" Enter
   tmux delete-buffer -b "$buffer_name" || true
+}
+
+hash_message() {
+  local message="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$message" | sha256sum | awk '{print $1}'
+  else
+    printf '%s' "$message" | shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+build_pr_creation_nudge_prompt() {
+  local task_id="$1"
+  local elapsed_minutes="$2"
+
+  cat <<EOF
+[ORCHESTRATOR FOLLOW-UP]
+Task: ${task_id}
+Goal: Open the PR now. Continue on the same branch.
+
+No PR detected after ${elapsed_minutes} minutes.
+
+Do this next:
+1. Push current branch state.
+2. Open a non-draft PR immediately with current scope.
+3. Include assumptions + validation commands/results in PR description.
+4. Reply with: PR URL, what is done, what remains.
+EOF
+}
+
+build_respawn_command() {
+  local session="$1"
+  local width="$2"
+  local height="$3"
+  local worktree_abs="$4"
+  local run_agent_script="$5"
+  local agent="$6"
+  local model="$7"
+  local thinking="$8"
+
+  local run_agent_command
+  run_agent_command="$(printf '%q %q %q %q' "$run_agent_script" "$agent" "$model" "$thinking")"
+  printf 'tmux new-session -d -s %q -x %q -y %q -c %q %q' "$session" "$width" "$height" "$worktree_abs" "$run_agent_command"
 }
 
 merge_pr() {
@@ -145,6 +194,9 @@ TASK_FILE=".pi/active-tasks.json"
 BASE_BRANCH="main"
 MAX_RESPAWNS="3"
 MERGE_METHOD="squash"
+PR_OPEN_SLA_MINUTES="45"
+PR_OPEN_MAX_NUDGES="3"
+FOLLOWUP_COOLDOWN_MINUTES="15"
 DRY_RUN="false"
 
 while [[ $# -gt 0 ]]; do
@@ -163,6 +215,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --merge-method)
       MERGE_METHOD="${2:-}"
+      shift 2
+      ;;
+    --pr-open-sla-minutes)
+      PR_OPEN_SLA_MINUTES="${2:-}"
+      shift 2
+      ;;
+    --pr-open-max-nudges)
+      PR_OPEN_MAX_NUDGES="${2:-}"
+      shift 2
+      ;;
+    --followup-cooldown-minutes)
+      FOLLOWUP_COOLDOWN_MINUTES="${2:-}"
       shift 2
       ;;
     --dry-run)
@@ -192,6 +256,27 @@ case "$MERGE_METHOD" in
   merge|squash|rebase) ;;
   *)
     echo "--merge-method must be merge, squash, or rebase" >&2
+    exit 1
+    ;;
+esac
+
+case "$PR_OPEN_SLA_MINUTES" in
+  ''|*[!0-9]*)
+    echo "--pr-open-sla-minutes must be a non-negative integer" >&2
+    exit 1
+    ;;
+esac
+
+case "$PR_OPEN_MAX_NUDGES" in
+  ''|*[!0-9]*)
+    echo "--pr-open-max-nudges must be a non-negative integer" >&2
+    exit 1
+    ;;
+esac
+
+case "$FOLLOWUP_COOLDOWN_MINUTES" in
+  ''|*[!0-9]*)
+    echo "--followup-cooldown-minutes must be a non-negative integer" >&2
     exit 1
     ;;
 esac
@@ -259,6 +344,16 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   tmux_session="$(jq -r '.tmuxSession // ""' <<<"$task")"
   branch="$(jq -r '.branch // ""' <<<"$task")"
   repo="$(jq -r '.repo // ""' <<<"$task")"
+  worktree="$(jq -r '.worktree // ""' <<<"$task")"
+  agent="$(jq -r '.agent // "agent"' <<<"$task")"
+  model="$(jq -r '.model // ""' <<<"$task")"
+  fallback_model="$(jq -r '.fallbackModel // ""' <<<"$task")"
+  thinking="$(jq -r '.thinking // "medium"' <<<"$task")"
+  run_agent_script="$(jq -r '.runAgentScript // "scripts/run-agent-with-log.sh"' <<<"$task")"
+  tmux_width="$(jq -r '.tmuxWidth // 80' <<<"$task")"
+  tmux_height="$(jq -r '.tmuxHeight // 24' <<<"$task")"
+  fallback_activated="$(jq -r '.fallbackActivated // false' <<<"$task")"
+  fallback_activated_at_json="$(jq '.fallbackActivatedAt // null' <<<"$task")"
   respawn_attempts="$(jq -r '.respawnAttempts // 0' <<<"$task")"
   max_attempts="$(jq -r '.maxRespawnAttempts // empty' <<<"$task")"
   respawn_command="$(jq -r '.respawnCommand // ""' <<<"$task")"
@@ -271,6 +366,10 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   close_session_on_merge="$(jq -r '.closeSessionOnMerge // true' <<<"$task")"
   task_merge_method="$(jq -r '.mergeMethod // ""' <<<"$task")"
 
+  started_at_ms="$(jq -r '.startedAt // 0' <<<"$task")"
+  pr_open_nudge_count="$(jq -r '.prOpenNudgeCount // 0' <<<"$task")"
+  last_pr_open_nudge_at_json="$(jq '.lastPrOpenNudgeAt // null' <<<"$task")"
+  last_followup_hash="$(jq -r '.lastFollowupHash // ""' <<<"$task")"
   last_followup_at_json="$(jq '.lastFollowupAt // null' <<<"$task")"
   completed_at_json="$(jq '.completedAt // null' <<<"$task")"
   last_respawn_at_json="$(jq '.lastRespawnAt // null' <<<"$task")"
@@ -286,6 +385,22 @@ for (( i=0; i<TASK_COUNT; i++ )); do
 
   case "$followup_count" in
     ''|*[!0-9]*) followup_count="0" ;;
+  esac
+
+  case "$pr_open_nudge_count" in
+    ''|*[!0-9]*) pr_open_nudge_count="0" ;;
+  esac
+
+  case "$started_at_ms" in
+    ''|*[!0-9]*) started_at_ms="0" ;;
+  esac
+
+  case "$tmux_width" in
+    ''|*[!0-9]*) tmux_width="80" ;;
+  esac
+
+  case "$tmux_height" in
+    ''|*[!0-9]*) tmux_height="24" ;;
   esac
 
   if [[ -z "$max_attempts" ]]; then
@@ -515,6 +630,16 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     continue
   fi
 
+  if [[ "$worktree" = /* ]]; then
+    worktree_abs="$worktree"
+  else
+    worktree_abs="$ROOT_DIR/$worktree"
+  fi
+
+  if [[ -z "$respawn_command" && -n "$model" && -n "$agent" && -n "$run_agent_script" ]]; then
+    respawn_command="$(build_respawn_command "$tmux_session" "$tmux_width" "$tmux_height" "$worktree_abs" "$run_agent_script" "$agent" "$model" "$thinking")"
+  fi
+
   # Keep sessions alive. If down unexpectedly, try respawn.
   if [[ "$tmux_alive" != "true" ]]; then
     if [[ "$respawn_attempts" -lt "$max_attempts" && -n "$respawn_command" ]]; then
@@ -533,6 +658,29 @@ for (( i=0; i<TASK_COUNT; i++ )); do
       fi
 
       alerts+=("$id: respawned attempt ${respawn_attempts}/${max_attempts} (session was down)")
+    fi
+
+    if [[ "$tmux_alive" != "true" && "$respawn_attempts" -ge "$max_attempts" && -n "$fallback_model" && "$model" != "$fallback_model" ]]; then
+      model="$fallback_model"
+      fallback_activated="true"
+      fallback_activated_at_json="$NOW_MS"
+      respawn_attempts="0"
+      respawn_command="$(build_respawn_command "$tmux_session" "$tmux_width" "$tmux_height" "$worktree_abs" "$run_agent_script" "$agent" "$model" "$thinking")"
+      alerts+=("$id: switching to fallback model: $fallback_model")
+
+      if [[ "$DRY_RUN" != "true" ]]; then
+        bash -lc "$respawn_command"
+      fi
+      respawn_attempts="$((respawn_attempts + 1))"
+      last_respawn_at_json="$NOW_MS"
+
+      if [[ "$DRY_RUN" != "true" ]]; then
+        if tmux has-session -t "$tmux_session" 2>/dev/null; then
+          tmux_alive="true"
+        fi
+      else
+        tmux_alive="true"
+      fi
     fi
   fi
 
@@ -593,6 +741,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   fi
 
   combined_followup_message=""
+  followup_kind=""
   requires_followup="false"
   if [[ "$has_open_pr" == "true" && ( "$ci_failing" == "true" || "$critical_review_feedback" == "true" || "$pending_human_followup" == "true" || "$ai_review_request_needed" == "true" ) ]]; then
     requires_followup="true"
@@ -611,13 +760,45 @@ for (( i=0; i<TASK_COUNT; i++ )); do
       "$checks_failed_details" \
       "$critical_review_details" \
       "$human_review_details")"
+    followup_kind="review"
+  fi
+
+  if [[ "$has_open_pr" != "true" && "$has_merged_pr" != "true" && "$started_at_ms" -gt 0 ]]; then
+    elapsed_minutes="$(((NOW_MS - started_at_ms) / 60000))"
+    if [[ "$elapsed_minutes" -ge "$PR_OPEN_SLA_MINUTES" ]]; then
+      if [[ "$pr_open_nudge_count" -lt "$PR_OPEN_MAX_NUDGES" ]]; then
+        combined_followup_message="$(build_pr_creation_nudge_prompt "$id" "$elapsed_minutes")"
+        followup_kind="pr-open"
+      else
+        alerts+=("$id: no PR after ${elapsed_minutes}m and ${pr_open_nudge_count} nudges; escalate to human")
+      fi
+    fi
   fi
 
   followup_sent="false"
   if [[ -n "$combined_followup_message" && "$tmux_alive" == "true" ]]; then
+    now_ms="$NOW_MS"
+    last_followup_at_ms="$(jq -r 'if . == null then 0 else . end' <<<"$last_followup_at_json")"
+    case "$last_followup_at_ms" in
+      ''|*[!0-9]*) last_followup_at_ms="0" ;;
+    esac
+
+    followup_cooldown_ms="$((FOLLOWUP_COOLDOWN_MINUTES * 60 * 1000))"
+    followup_hash="$(hash_message "$combined_followup_message")"
+
     should_send_followup="false"
-    if [[ "$pending_human_followup" == "true" || "$combined_followup_message" != "$last_followup_message" ]]; then
+    if [[ "$pending_human_followup" == "true" ]]; then
       should_send_followup="true"
+    elif [[ "$followup_hash" != "$last_followup_hash" ]]; then
+      if [[ "$last_followup_at_ms" -eq 0 || $((now_ms - last_followup_at_ms)) -ge "$followup_cooldown_ms" ]]; then
+        should_send_followup="true"
+      fi
+    fi
+
+    if [[ "$followup_kind" == "pr-open" && "$pr_open_nudge_count" -lt "$PR_OPEN_MAX_NUDGES" ]]; then
+      if [[ "$last_followup_at_ms" -eq 0 || $((now_ms - last_followup_at_ms)) -ge "$followup_cooldown_ms" ]]; then
+        should_send_followup="true"
+      fi
     fi
 
     if [[ "$should_send_followup" == "true" ]]; then
@@ -633,14 +814,21 @@ for (( i=0; i<TASK_COUNT; i++ )); do
         followup_count="$((followup_count + 1))"
         last_followup_at_json="$NOW_MS"
         last_followup_message="$combined_followup_message"
+        last_followup_hash="$followup_hash"
+
+        if [[ "$followup_kind" == "pr-open" ]]; then
+          pr_open_nudge_count="$((pr_open_nudge_count + 1))"
+          last_pr_open_nudge_at_json="$NOW_MS"
+          alerts+=("$id: nudged subagent to create PR (${pr_open_nudge_count}/${PR_OPEN_MAX_NUDGES})")
+        else
+          alerts+=("$id: sent structured follow-up prompt to subagent")
+        fi
 
         if [[ "$pending_human_followup" == "true" ]]; then
           pending_human_followup="false"
           human_review_state="changes-requested"
           human_review_requested_at_json="null"
         fi
-
-        alerts+=("$id: sent structured follow-up prompt to subagent")
       fi
     fi
   fi
@@ -651,6 +839,15 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   fi
   if [[ "$has_open_pr" != "true" && "$has_merged_pr" != "true" ]]; then
     reasons+=("no PR yet")
+    if [[ "$started_at_ms" -gt 0 ]]; then
+      elapsed_no_pr_minutes="$(((NOW_MS - started_at_ms) / 60000))"
+      if [[ "$elapsed_no_pr_minutes" -ge "$PR_OPEN_SLA_MINUTES" ]]; then
+        reasons+=("PR overdue (${elapsed_no_pr_minutes}m >= ${PR_OPEN_SLA_MINUTES}m SLA)")
+      fi
+      if [[ "$pr_open_nudge_count" -ge "$PR_OPEN_MAX_NUDGES" ]]; then
+        reasons+=("PR open nudges exhausted (${pr_open_nudge_count}/${PR_OPEN_MAX_NUDGES})")
+      fi
+    fi
   fi
   if [[ "$branch_mergeable" != "true" && "$has_open_pr" == "true" ]]; then
     reasons+=("branch is not mergeable with ${BASE_BRANCH}")
@@ -759,7 +956,15 @@ for (( i=0; i<TASK_COUNT; i++ )); do
       fi
     fi
   else
-    if [[ "$tmux_alive" == "true" ]]; then
+    elapsed_no_pr_minutes="0"
+    if [[ "$started_at_ms" -gt 0 ]]; then
+      elapsed_no_pr_minutes="$(((NOW_MS - started_at_ms) / 60000))"
+    fi
+
+    if [[ "$pr_open_nudge_count" -ge "$PR_OPEN_MAX_NUDGES" && "$elapsed_no_pr_minutes" -ge "$PR_OPEN_SLA_MINUTES" ]]; then
+      new_status="needs-human"
+      alerts+=("$id: no PR created after SLA and max nudges; needs human intervention")
+    elif [[ "$tmux_alive" == "true" ]]; then
       new_status="running"
     else
       if [[ "$respawn_attempts" -ge "$max_attempts" ]]; then
@@ -784,7 +989,11 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     --arg mergeMethod "$effective_merge_method" \
     --arg humanReviewState "$human_review_state" \
     --arg humanReviewFeedback "$human_review_feedback" \
+    --arg model "$model" \
+    --arg fallbackModel "$fallback_model" \
+    --arg respawnCommand "$respawn_command" \
     --arg lastFollowupMessage "$last_followup_message" \
+    --arg lastFollowupHash "$last_followup_hash" \
     --argjson hasPr "$has_open_pr" \
     --argjson prNumber "$pr_number_json" \
     --argjson prUpdatedAt "$pr_updated_at_ms" \
@@ -803,12 +1012,16 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     --argjson aiGateReady "$ai_gate_ready" \
     --argjson respawnAttempts "$respawn_attempts" \
     --argjson pendingHumanFollowup "$pending_human_followup" \
+    --argjson fallbackActivated "$fallback_activated" \
     --argjson followupCount "$followup_count" \
+    --argjson prOpenNudgeCount "$pr_open_nudge_count" \
     --argjson closeSessionOnMerge "$close_session_on_merge" \
     --argjson lastCheckedAt "$NOW_MS" \
     --argjson lastHeartbeatAt "$last_heartbeat_json" \
     --argjson lastRespawnAt "$last_respawn_at_json" \
+    --argjson fallbackActivatedAt "$fallback_activated_at_json" \
     --argjson lastFollowupAt "$last_followup_at_json" \
+    --argjson lastPrOpenNudgeAt "$last_pr_open_nudge_at_json" \
     --argjson humanReviewRequestedAt "$human_review_requested_at_json" \
     --argjson lastHumanReviewActionAt "$last_human_review_action_at_json" \
     --argjson completedAt "$completed_at_json" \
@@ -837,12 +1050,20 @@ for (( i=0; i<TASK_COUNT; i++ )); do
       | .respawnAttempts = $respawnAttempts
       | .mergeMethod = $mergeMethod
       | .closeSessionOnMerge = $closeSessionOnMerge
+      | .model = $model
+      | .fallbackModel = $fallbackModel
+      | .respawnCommand = $respawnCommand
       | .humanReviewState = $humanReviewState
       | .humanReviewFeedback = $humanReviewFeedback
       | .pendingHumanFollowup = $pendingHumanFollowup
+      | .fallbackActivated = $fallbackActivated
+      | .fallbackActivatedAt = $fallbackActivatedAt
       | .followupCount = $followupCount
+      | .prOpenNudgeCount = $prOpenNudgeCount
       | .lastFollowupAt = $lastFollowupAt
+      | .lastPrOpenNudgeAt = $lastPrOpenNudgeAt
       | .lastFollowupMessage = $lastFollowupMessage
+      | .lastFollowupHash = $lastFollowupHash
       | .humanReviewRequestedAt = $humanReviewRequestedAt
       | .lastHumanReviewActionAt = $lastHumanReviewActionAt
       | .lastCheckedAt = $lastCheckedAt

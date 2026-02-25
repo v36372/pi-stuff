@@ -4,6 +4,7 @@
     "tmuxSession": "codex-templates",
     "agent": "templates",
     "model": "gpt-5.3-codex",
+    "fallbackModel": "gemini-2.5-pro",
     "thinking": "high",
     "description": "Custom email templates for agency customers",
     "repo": "owner/repo",
@@ -22,6 +23,9 @@
     "maxRespawnAttempts": 3,
     "notifyOnComplete": true,
     "respawnCommand": "tmux new-session -d -s codex-templates -x 80 -y 24 -c /abs/path/to/worktree 'scripts/run-agent-with-log.sh templates gpt-5.3-codex high'",
+    "runAgentScript": "scripts/run-agent-with-log.sh",
+    "tmuxWidth": 80,
+    "tmuxHeight": 24,
     "logPath": ".pi/logs/feat-custom-templates.log",
     "blockingReason": "",
     "lastHeartbeatAt": 1740268800000,
@@ -30,9 +34,14 @@
     "pendingHumanFollowup": false,
     "humanReviewRequestedAt": null,
     "lastHumanReviewActionAt": null,
+    "fallbackActivated": false,
+    "fallbackActivatedAt": null,
     "followupCount": 0,
+    "prOpenNudgeCount": 0,
     "lastFollowupAt": null,
+    "lastPrOpenNudgeAt": null,
     "lastFollowupMessage": "",
+    "lastFollowupHash": "",
     "mergedAt": null
   }
 ]

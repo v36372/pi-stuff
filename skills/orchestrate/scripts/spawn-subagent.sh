@@ -13,6 +13,7 @@ Usage:
     --tmux-session <name> \
     --agent <label> \
     --model <model-id> \
+    [--fallback-model <model-id>] \
     [--thinking <low|medium|high>] \
     [--base-ref <ref>] \
     [--install-command <command>] \
@@ -70,6 +71,7 @@ BRANCH=""
 TMUX_SESSION=""
 AGENT=""
 MODEL=""
+FALLBACK_MODEL=""
 THINKING="medium"
 BASE_REF="origin/main"
 INSTALL_COMMAND="pnpm install"
@@ -116,6 +118,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --model)
     MODEL="${2:-}"
+    shift 2
+    ;;
+  --fallback-model)
+    FALLBACK_MODEL="${2:-}"
     shift 2
     ;;
   --thinking)
@@ -214,6 +220,24 @@ esac
 if [[ ! "$INITIAL_PROMPT_DELAY" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "--initial-prompt-delay must be a positive number" >&2
   exit 1
+fi
+
+case "$TMUX_WIDTH" in
+'' | *[!0-9]*)
+  echo "--tmux-width must be a non-negative integer" >&2
+  exit 1
+  ;;
+esac
+
+case "$TMUX_HEIGHT" in
+'' | *[!0-9]*)
+  echo "--tmux-height must be a non-negative integer" >&2
+  exit 1
+  ;;
+esac
+
+if [[ -n "$FALLBACK_MODEL" && "$FALLBACK_MODEL" == "$MODEL" ]]; then
+  FALLBACK_MODEL=""
 fi
 
 require_command git
@@ -338,6 +362,7 @@ TASK_JSON="$(jq -n \
   --arg agent "$AGENT" \
   --arg model "$MODEL" \
   --arg thinking "$THINKING" \
+  --arg fallbackModel "$FALLBACK_MODEL" \
   --arg description "$DESCRIPTION" \
   --arg repo "$REPO" \
   --arg worktree "$WORKTREE" \
@@ -348,6 +373,9 @@ TASK_JSON="$(jq -n \
   --arg blockingReason "" \
   --arg initialPromptFile "$INITIAL_PROMPT_FILE" \
   --arg mergeMethod "$MERGE_METHOD" \
+  --arg runAgentScript "$RUN_AGENT_SCRIPT" \
+  --argjson tmuxWidth "$TMUX_WIDTH" \
+  --argjson tmuxHeight "$TMUX_HEIGHT" \
   --argjson startedAt "$NOW_MS" \
   --argjson lastHeartbeatAt "$NOW_MS" \
   --argjson respawnAttempts 0 \
@@ -358,6 +386,7 @@ TASK_JSON="$(jq -n \
     tmuxSession: $tmuxSession,
     agent: $agent,
     model: $model,
+    fallbackModel: $fallbackModel,
     thinking: $thinking,
     description: $description,
     repo: $repo,
@@ -369,6 +398,9 @@ TASK_JSON="$(jq -n \
     maxRespawnAttempts: $maxRespawnAttempts,
     notifyOnComplete: $notifyOnComplete,
     respawnCommand: $respawnCommand,
+    runAgentScript: $runAgentScript,
+    tmuxWidth: $tmuxWidth,
+    tmuxHeight: $tmuxHeight,
     logPath: $logPath,
     blockingReason: $blockingReason,
     lastHeartbeatAt: $lastHeartbeatAt,
@@ -376,11 +408,16 @@ TASK_JSON="$(jq -n \
     mergeMethod: $mergeMethod,
     closeSessionOnMerge: true,
     followupCount: 0,
+    prOpenNudgeCount: 0,
     lastFollowupAt: null,
+    lastPrOpenNudgeAt: null,
     lastFollowupMessage: "",
+    lastFollowupHash: "",
     humanReviewState: "pending",
     humanReviewFeedback: "",
     pendingHumanFollowup: false,
+    fallbackActivated: false,
+    fallbackActivatedAt: null,
     humanReviewRequestedAt: null,
     lastHumanReviewActionAt: null,
     mergedAt: null

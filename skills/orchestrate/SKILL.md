@@ -8,6 +8,10 @@ compatibility: Requires git, tmux, gh, jq, and scripts/run-agent-with-log.sh.
 
 Use this skill for end-to-end delivery of a complete idea (not just a single feature).
 
+For detailed ops/playbooks, read references on demand:
+- `references/orchestrator-operations.md`
+- `references/definition-of-done.md`
+
 ## Inputs
 
 - A plan or PRD markdown file path (required)
@@ -30,6 +34,7 @@ Use this skill for end-to-end delivery of a complete idea (not just a single fea
 10. During the interview, use interactive Q&A via the `answer.ts` extension when TUI is available; if unavailable, ask user to load it before proceeding.
 11. When asking user to pick subagent models, display only models from currently logged-in providers.
 12. After PR creation, keep tmux session alive until PR is merged.
+13. Maintain `.pi/orchestrate/tasks.json` as the machine source of truth for scheduling.
 
 ## Workflow
 
@@ -75,7 +80,12 @@ Produce `.pi/orchestrate/rescoped-plan.md` with:
 
 ### 4) Task decomposition
 
-Produce `.pi/orchestrate/tasks.md` where every task contains:
+Produce both:
+
+- `.pi/orchestrate/tasks.md` (human-readable)
+- `.pi/orchestrate/tasks.json` (machine source of truth used by scripts)
+
+Each task must contain:
 
 - `id`
 - `size`: `small | medium` (never `big`)
@@ -86,6 +96,7 @@ Produce `.pi/orchestrate/tasks.md` where every task contains:
 - `expectedSuccessCriteria`
 - `validation` (lint/type/tests/e2e/review requirements)
 - `priority`
+- `status`: `queued | running | complete | cancelled`
 
 ### 5) Capacity planning (low concurrency + model allocation)
 
@@ -105,6 +116,17 @@ Scheduling rules:
 - Assign only models approved by the user.
 - Ensure approved models are a subset of `./scripts/list-logged-in-models.sh --ids` output.
 
+Use scheduler for deterministic wave picks:
+
+```bash
+./scripts/schedule-wave.sh \
+  --tasks-file .pi/orchestrate/tasks.json \
+  --active-task-file .pi/active-tasks.json \
+  --max-concurrency 2 \
+  --wave-label wave-1 \
+  --output .pi/orchestrate/next-wave.json
+```
+
 ### 6) Prepare subagent prompt templates
 
 Create prompts from:
@@ -115,6 +137,16 @@ Create prompts from:
 Write task-specific initial prompts to:
 
 - `.pi/orchestrate/prompts/<task-id>.md`
+
+Use renderer to avoid placeholder mistakes:
+
+```bash
+./scripts/render-subagent-prompt.sh \
+  --template templates/subagent-initial-prompt.md \
+  --output .pi/orchestrate/prompts/<task-id>.md \
+  --var TASK_ID=<task-id> \
+  --var TASK_DESCRIPTION="<description>"
+```
 
 Include concrete paths, constraints, and current initiative context.
 
@@ -136,6 +168,7 @@ Use helper script:
   --tmux-session codex-templates \
   --agent templates \
   --model gpt-5.3-codex \
+  --fallback-model gemini-2.5-pro \
   --thinking high \
   --initial-prompt-file .pi/orchestrate/prompts/feat-custom-templates.md
 ```
@@ -146,6 +179,7 @@ The script:
 - optionally installs dependencies
 - launches pi in tmux via `scripts/run-agent-with-log.sh`
 - injects initial task prompt into the session (newline-safe compaction to avoid multi-send spam in tmux)
+- stores fallback model metadata for automatic model failover when respawns are exhausted
 - records task metadata in `.pi/active-tasks.json`
 
 After PR creation, subagent should request AI reviews with:
@@ -168,18 +202,13 @@ Suggested cron job:
 */10 * * * * cd /path/to/repo && ./packages/coding-agent/examples/skills/orchestrate/scripts/check-active-tasks.sh --task-file .pi/active-tasks.json >> .pi/orchestrate-monitor.log 2>&1
 ```
 
-Monitor responsibilities:
+Monitor behavior is implemented by `scripts/check-active-tasks.sh` and documented in `references/orchestrator-operations.md`.
 
-- keep tmux sessions alive while PR is open
-- verify PR exists for tracked branch
-- wait for automated reviews from Copilot/Codex/Gemini
-- if automated reviews were not requested, prompt subagent to run `./scripts/request-ai-reviews.sh`
-- check CI/check runs via `gh`
-- on CI failures or critical AI review feedback, send a structured follow-up prompt (failing checks + links, review summaries, required response format) to subagent tmux session
-- if a session is unexpectedly down, respawn it (max attempts)
-- notify user for human review only after CI + AI review gates pass
-- merge PR after human approval, then close tmux session
-- if human requests changes, send follow-up prompt to subagent and continue the loop
+Key outcomes:
+- session resilience with fallback model failover
+- PR-first escalation if no PR is opened within SLA
+- deduped/cooldown follow-up prompts
+- merge only after CI + AI + human gates pass
 
 ### 9) Human review actions
 
@@ -190,7 +219,21 @@ Record human review decisions with:
 ./scripts/human-review-action.sh --task-id feat-custom-templates --request-changes "Please address API contract mismatch and add tests."
 ```
 
-### 10) Definition of done gate (strict)
+### 10) Status dashboard + done gate automation
+
+Use dashboard for quick monitoring:
+
+```bash
+./scripts/orchestrate-status.sh --task-file .pi/active-tasks.json
+```
+
+Verify done gate for a specific task before marking complete:
+
+```bash
+./scripts/verify-done-gate.sh --task-id feat-custom-templates --task-file .pi/active-tasks.json
+```
+
+### 11) Definition of done gate (strict)
 
 A task is complete only when all are true:
 
@@ -211,13 +254,14 @@ See `references/definition-of-done.md` for details.
 
 Use the shape from `templates/active-task.example.json` and include at least:
 
-- `id`, `tmuxSession`, `agent`, `model`, `thinking`
+- `id`, `tmuxSession`, `agent`, `model`, `fallbackModel`, `thinking`
 - `description`, `repo`, `worktree`, `branch`
 - `startedAt`, `status`, `respawnAttempts`, `maxRespawnAttempts`
 - `notifyOnComplete`, `respawnCommand`, `logPath`
 - `initialPromptFile`, `wave`, `priority`
 - `humanReviewState`, `humanReviewFeedback`, `pendingHumanFollowup`
-- `followupCount`, `lastFollowupAt`, `lastFollowupMessage`, `prUpdatedAt`
+- `followupCount`, `lastFollowupAt`, `lastFollowupMessage`, `lastFollowupHash`, `prUpdatedAt`
+- `prOpenNudgeCount`, `lastPrOpenNudgeAt`, `fallbackActivated`, `fallbackActivatedAt`
 
 Recommended status values:
 

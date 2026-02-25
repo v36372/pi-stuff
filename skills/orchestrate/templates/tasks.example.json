@@ -1,0 +1,20 @@
+[
+  {
+    "id": "feat-custom-templates",
+    "size": "medium",
+    "difficulty": "medium",
+    "dependencies": [],
+    "ownerModel": "gpt-5.3-codex",
+    "fallbackModel": "gemini-2.5-pro",
+    "expectedSuccessCriteria": [
+      "Agency can create custom templates",
+      "Template preview renders correctly"
+    ],
+    "validation": [
+      "pnpm lint",
+      "pnpm test"
+    ],
+    "priority": "high",
+    "status": "queued"
+  }
+]
