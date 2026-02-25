@@ -17,12 +17,12 @@ A reusable skill template for running end-to-end implementation plans with:
 ## Files
 
 - `SKILL.md` - skill instructions and workflow
-- `scripts/spawn-subagent.sh` - creates worktree/branch, starts tmux subagent, injects initial prompt, updates `.pi/active-tasks.json`
+- `scripts/spawn-subagent.sh` - creates worktree/branch, starts tmux subagent, injects initial prompt with newline-safe compaction (prevents multi-send spam), updates `.pi/active-tasks.json`
 - `scripts/check-active-tasks.sh` - checks tmux/PR/CI/reviews, sends follow-up prompts, handles merge + session close
 - `scripts/request-ai-reviews.sh` - requests automated AI reviewers (Copilot/Codex/Gemini) on an open PR via gh CLI
 - `scripts/human-review-action.sh` - records human approval or human requested changes
 - `scripts/list-logged-in-models.sh` - lists models for currently logged-in providers (used for model selection prompts)
-- `templates/subagent-initial-prompt.md` - initial prompt template for spawned subagents
+- `templates/subagent-initial-prompt.md` - initial prompt template for spawned subagents (Ralph loop until PR is created)
 - `templates/subagent-followup-prompt.md` - structured follow-up prompt template for CI/review/human feedback loops
 - `templates/interview-model-selection-prompt.md` - copy/paste snippet for asking model selection with numbered logged-in models
 - `templates/active-task.example.json` - task record shape

@@ -40,7 +40,18 @@ send_prompt_to_tmux() {
   local message="$2"
   local buffer_name="orchestrate-followup-${session//[^a-zA-Z0-9]/_}-$$"
 
-  printf '%s' "$message" | tmux load-buffer -b "$buffer_name" -
+  local compact_message
+  compact_message="$(printf '%s' "$message" | tr '\r\n' '  ' | tr -s '[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')"
+
+  if [[ -z "$compact_message" ]]; then
+    return 0
+  fi
+
+  if [[ "${#compact_message}" -gt 12000 ]]; then
+    compact_message="${compact_message:0:12000} ... [truncated by orchestrate to avoid tmux input flood]"
+  fi
+
+  printf '%s' "$compact_message" | tmux load-buffer -b "$buffer_name" -
   tmux paste-buffer -b "$buffer_name" -t "$session"
   tmux send-keys -t "$session" Enter
   tmux delete-buffer -b "$buffer_name" || true

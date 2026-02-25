@@ -40,6 +40,28 @@ require_command() {
   fi
 }
 
+compact_prompt_for_tmux() {
+  local file_path="$1"
+
+  awk '
+    {
+      gsub(/\r/, "")
+      gsub(/[[:space:]]+/, " ")
+      sub(/^ /, "")
+      sub(/ $/, "")
+      if (length($0) > 0) {
+        if (out != "") {
+          out = out " | "
+        }
+        out = out $0
+      }
+    }
+    END {
+      print out
+    }
+  ' "$file_path"
+}
+
 ID=""
 REPO=""
 DESCRIPTION=""
@@ -280,11 +302,19 @@ tmux new-session -d -s "$TMUX_SESSION" -x "$TMUX_WIDTH" -y "$TMUX_HEIGHT" -c "$W
 
 if [[ -n "$INITIAL_PROMPT_FILE_ABS" ]]; then
   sleep "$INITIAL_PROMPT_DELAY"
-  PROMPT_BUFFER="orchestrate-init-${TMUX_SESSION//[^a-zA-Z0-9]/_}-$$"
-  tmux load-buffer -b "$PROMPT_BUFFER" "$INITIAL_PROMPT_FILE_ABS"
-  tmux paste-buffer -b "$PROMPT_BUFFER" -t "$TMUX_SESSION"
-  tmux send-keys -t "$TMUX_SESSION" Enter
-  tmux delete-buffer -b "$PROMPT_BUFFER" || true
+
+  prompt_payload="$(compact_prompt_for_tmux "$INITIAL_PROMPT_FILE_ABS")"
+  if [[ -n "$prompt_payload" ]]; then
+    if [[ "${#prompt_payload}" -gt 12000 ]]; then
+      prompt_payload="${prompt_payload:0:12000} ... [truncated by orchestrate to avoid tmux input flood]"
+    fi
+
+    PROMPT_BUFFER="orchestrate-init-${TMUX_SESSION//[^a-zA-Z0-9]/_}-$$"
+    printf '%s' "$prompt_payload" | tmux load-buffer -b "$PROMPT_BUFFER" -
+    tmux paste-buffer -b "$PROMPT_BUFFER" -t "$TMUX_SESSION"
+    tmux send-keys -t "$TMUX_SESSION" Enter
+    tmux delete-buffer -b "$PROMPT_BUFFER" || true
+  fi
 fi
 
 if [[ ! -f "$TASK_FILE_ABS" ]]; then

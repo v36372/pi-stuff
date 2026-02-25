@@ -118,6 +118,8 @@ Write task-specific initial prompts to:
 
 Include concrete paths, constraints, and current initiative context.
 
+The initial template requires the subagent to run a Ralph loop (`task-<id>-to-pr`) until a non-draft PR is opened.
+
 ### 7) Spawn subagents (wave-based)
 
 Spawn only active-wave tasks, never all tasks at once.
@@ -143,7 +145,7 @@ The script:
 - creates git worktree and branch
 - optionally installs dependencies
 - launches pi in tmux via `scripts/run-agent-with-log.sh`
-- injects initial task prompt into the session
+- injects initial task prompt into the session (newline-safe compaction to avoid multi-send spam in tmux)
 - records task metadata in `.pi/active-tasks.json`
 
 After PR creation, subagent should request AI reviews with:
