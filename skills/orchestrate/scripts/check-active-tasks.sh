@@ -12,10 +12,13 @@ Usage:
     [--pr-open-sla-minutes <n>] \
     [--pr-open-max-nudges <n>] \
     [--followup-cooldown-minutes <n>] \
+    [--capture-pane-lines <n>] \
+    [--require-human-review <true|false>] \
     [--dry-run]
 
 Checks active orchestrator tasks deterministically:
 - tmux session health
+- latest tmux pane snapshot (for status context, without relying on log files)
 - PR existence and merge state
 - CI/check status
 - required review approvals (Codex, Gemini, Copilot)
@@ -25,8 +28,8 @@ Loop behavior after PR creation:
 - Keep tmux session alive until PR is merged
 - Wait for automated reviews/checks
 - Send follow-up prompt to subagent when CI fails or critical AI review feedback appears
-- Notify human review only after CI + AI review gates pass
-- Merge only after human approval, then close tmux session
+- If --require-human-review=true, notify human review only after CI + AI review gates pass
+- Otherwise merge automatically after CI + AI gates pass
 - Escalate when PR is not created within SLA and nudge subagent before human escalation
 - Deduplicate/cooldown follow-up prompts to avoid spam
 EOF
@@ -91,6 +94,11 @@ Do this next:
 EOF
 }
 
+is_fully_qualified_model_ref() {
+  local model_ref="$1"
+  [[ "$model_ref" == */* ]] && [[ -n "${model_ref%%/*}" ]] && [[ -n "${model_ref#*/}" ]]
+}
+
 build_respawn_command() {
   local session="$1"
   local width="$2"
@@ -113,18 +121,18 @@ merge_pr() {
   local method_flag=""
 
   case "$merge_method" in
-    merge)
-      method_flag="--merge"
-      ;;
-    squash)
-      method_flag="--squash"
-      ;;
-    rebase)
-      method_flag="--rebase"
-      ;;
-    *)
-      return 1
-      ;;
+  merge)
+    method_flag="--merge"
+    ;;
+  squash)
+    method_flag="--squash"
+    ;;
+  rebase)
+    method_flag="--rebase"
+    ;;
+  *)
+    return 1
+    ;;
   esac
 
   if [[ -n "$repo" ]]; then
@@ -148,6 +156,28 @@ normalize_prompt_text() {
   text="${text%"${text##*[![:space:]]}"}"
 
   printf '%s' "$text"
+}
+
+normalize_reviewers_csv() {
+  local csv="$1"
+  printf '%s' "$csv" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | sed 's/,,*/,/g; s/^,//; s/,$//'
+}
+
+reviewer_required() {
+  local reviewer="$1"
+  local csv="$2"
+  [[ ",${csv}," == *",${reviewer},"* ]]
+}
+
+capture_pane_snapshot() {
+  local session="$1"
+  local lines="$2"
+
+  if [[ "$lines" -eq 0 ]]; then
+    return 0
+  fi
+
+  tmux capture-pane -p -t "$session" -S "-$lines" 2>/dev/null || true
 }
 
 build_structured_followup_prompt() {
@@ -197,88 +227,113 @@ MERGE_METHOD="squash"
 PR_OPEN_SLA_MINUTES="45"
 PR_OPEN_MAX_NUDGES="3"
 FOLLOWUP_COOLDOWN_MINUTES="15"
+CAPTURE_PANE_LINES="80"
+REQUIRE_HUMAN_REVIEW="false"
 DRY_RUN="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --task-file)
-      TASK_FILE="${2:-}"
-      shift 2
-      ;;
-    --base-branch)
-      BASE_BRANCH="${2:-}"
-      shift 2
-      ;;
-    --max-respawns)
-      MAX_RESPAWNS="${2:-}"
-      shift 2
-      ;;
-    --merge-method)
-      MERGE_METHOD="${2:-}"
-      shift 2
-      ;;
-    --pr-open-sla-minutes)
-      PR_OPEN_SLA_MINUTES="${2:-}"
-      shift 2
-      ;;
-    --pr-open-max-nudges)
-      PR_OPEN_MAX_NUDGES="${2:-}"
-      shift 2
-      ;;
-    --followup-cooldown-minutes)
-      FOLLOWUP_COOLDOWN_MINUTES="${2:-}"
-      shift 2
-      ;;
-    --dry-run)
-      DRY_RUN="true"
-      shift 1
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage
-      exit 1
-      ;;
+  --task-file)
+    TASK_FILE="${2:-}"
+    shift 2
+    ;;
+  --base-branch)
+    BASE_BRANCH="${2:-}"
+    shift 2
+    ;;
+  --max-respawns)
+    MAX_RESPAWNS="${2:-}"
+    shift 2
+    ;;
+  --merge-method)
+    MERGE_METHOD="${2:-}"
+    shift 2
+    ;;
+  --pr-open-sla-minutes)
+    PR_OPEN_SLA_MINUTES="${2:-}"
+    shift 2
+    ;;
+  --pr-open-max-nudges)
+    PR_OPEN_MAX_NUDGES="${2:-}"
+    shift 2
+    ;;
+  --followup-cooldown-minutes)
+    FOLLOWUP_COOLDOWN_MINUTES="${2:-}"
+    shift 2
+    ;;
+  --capture-pane-lines)
+    CAPTURE_PANE_LINES="${2:-}"
+    shift 2
+    ;;
+  --require-human-review)
+    REQUIRE_HUMAN_REVIEW="${2:-}"
+    shift 2
+    ;;
+  --dry-run)
+    DRY_RUN="true"
+    shift 1
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Unknown argument: $1" >&2
+    usage
+    exit 1
+    ;;
   esac
 done
 
 case "$MAX_RESPAWNS" in
-  ''|*[!0-9]*)
-    echo "--max-respawns must be a non-negative integer" >&2
-    exit 1
-    ;;
+'' | *[!0-9]*)
+  echo "--max-respawns must be a non-negative integer" >&2
+  exit 1
+  ;;
 esac
 
 case "$MERGE_METHOD" in
-  merge|squash|rebase) ;;
-  *)
-    echo "--merge-method must be merge, squash, or rebase" >&2
-    exit 1
-    ;;
+merge | squash | rebase) ;;
+*)
+  echo "--merge-method must be merge, squash, or rebase" >&2
+  exit 1
+  ;;
 esac
 
 case "$PR_OPEN_SLA_MINUTES" in
-  ''|*[!0-9]*)
-    echo "--pr-open-sla-minutes must be a non-negative integer" >&2
-    exit 1
-    ;;
+'' | *[!0-9]*)
+  echo "--pr-open-sla-minutes must be a non-negative integer" >&2
+  exit 1
+  ;;
 esac
 
 case "$PR_OPEN_MAX_NUDGES" in
-  ''|*[!0-9]*)
-    echo "--pr-open-max-nudges must be a non-negative integer" >&2
-    exit 1
-    ;;
+'' | *[!0-9]*)
+  echo "--pr-open-max-nudges must be a non-negative integer" >&2
+  exit 1
+  ;;
 esac
 
 case "$FOLLOWUP_COOLDOWN_MINUTES" in
-  ''|*[!0-9]*)
-    echo "--followup-cooldown-minutes must be a non-negative integer" >&2
-    exit 1
-    ;;
+'' | *[!0-9]*)
+  echo "--followup-cooldown-minutes must be a non-negative integer" >&2
+  exit 1
+  ;;
+esac
+
+case "$CAPTURE_PANE_LINES" in
+'' | *[!0-9]*)
+  echo "--capture-pane-lines must be a non-negative integer" >&2
+  exit 1
+  ;;
+esac
+
+case "$REQUIRE_HUMAN_REVIEW" in
+true | false) ;;
+*)
+  echo "--require-human-review must be true or false" >&2
+  exit 1
+  ;;
 esac
 
 require_command jq
@@ -310,7 +365,7 @@ fi
 
 TASKS_JSON="$(jq 'if type == "array" then . elif type == "object" then [.] else [] end' "$TASK_FILE_ABS")"
 TASK_COUNT="$(jq 'length' <<<"$TASKS_JSON")"
-NOW_MS="$(( $(date +%s) * 1000 ))"
+NOW_MS="$(($(date +%s) * 1000))"
 
 alerts=()
 
@@ -336,7 +391,7 @@ pr_view_json() {
   fi
 }
 
-for (( i=0; i<TASK_COUNT; i++ )); do
+for ((i = 0; i < TASK_COUNT; i++)); do
   task="$(jq -c ".[$i]" <<<"$TASKS_JSON")"
 
   id="$(jq -r '.id // ""' <<<"$task")"
@@ -360,6 +415,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   notify_on_complete="$(jq -r '.notifyOnComplete // false' <<<"$task")"
   human_review_state="$(jq -r '.humanReviewState // "pending"' <<<"$task")"
   human_review_feedback="$(jq -r '.humanReviewFeedback // ""' <<<"$task")"
+  ai_reviewers_csv="$(jq -r '.aiReviewers // "copilot,codex,gemini"' <<<"$task")"
   pending_human_followup="$(jq -r '.pendingHumanFollowup // false' <<<"$task")"
   followup_count="$(jq -r '.followupCount // 0' <<<"$task")"
   last_followup_message="$(jq -r '.lastFollowupMessage // ""' <<<"$task")"
@@ -370,6 +426,8 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   pr_open_nudge_count="$(jq -r '.prOpenNudgeCount // 0' <<<"$task")"
   last_pr_open_nudge_at_json="$(jq '.lastPrOpenNudgeAt // null' <<<"$task")"
   last_followup_hash="$(jq -r '.lastFollowupHash // ""' <<<"$task")"
+  last_pane_snippet="$(jq -r '.lastPaneSnippet // ""' <<<"$task")"
+  last_pane_captured_at_json="$(jq '.lastPaneCapturedAt // null' <<<"$task")"
   last_followup_at_json="$(jq '.lastFollowupAt // null' <<<"$task")"
   completed_at_json="$(jq '.completedAt // null' <<<"$task")"
   last_respawn_at_json="$(jq '.lastRespawnAt // null' <<<"$task")"
@@ -380,27 +438,43 @@ for (( i=0; i<TASK_COUNT; i++ )); do
 
   last_human_review_action_ms="$(jq -r '.lastHumanReviewActionAt // 0' <<<"$task")"
   case "$last_human_review_action_ms" in
-    ''|*[!0-9]*) last_human_review_action_ms="0" ;;
+  '' | *[!0-9]*) last_human_review_action_ms="0" ;;
   esac
 
   case "$followup_count" in
-    ''|*[!0-9]*) followup_count="0" ;;
+  '' | *[!0-9]*) followup_count="0" ;;
   esac
 
   case "$pr_open_nudge_count" in
-    ''|*[!0-9]*) pr_open_nudge_count="0" ;;
+  '' | *[!0-9]*) pr_open_nudge_count="0" ;;
   esac
 
   case "$started_at_ms" in
-    ''|*[!0-9]*) started_at_ms="0" ;;
+  '' | *[!0-9]*) started_at_ms="0" ;;
   esac
 
+  ai_reviewers_csv="$(normalize_reviewers_csv "$ai_reviewers_csv")"
+  if [[ -z "$ai_reviewers_csv" ]]; then
+    ai_reviewers_csv="copilot,codex,gemini"
+  fi
+
+  for reviewer in ${ai_reviewers_csv//,/ }; do
+    case "$reviewer" in
+      copilot|codex|gemini) ;;
+      *)
+        alerts+=("$id: unsupported aiReviewers entry '$reviewer'; reverting to default copilot,codex,gemini")
+        ai_reviewers_csv="copilot,codex,gemini"
+        break
+        ;;
+    esac
+  done
+
   case "$tmux_width" in
-    ''|*[!0-9]*) tmux_width="80" ;;
+  '' | *[!0-9]*) tmux_width="80" ;;
   esac
 
   case "$tmux_height" in
-    ''|*[!0-9]*) tmux_height="24" ;;
+  '' | *[!0-9]*) tmux_height="24" ;;
   esac
 
   if [[ -z "$max_attempts" ]]; then
@@ -408,19 +482,31 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   fi
 
   case "$max_attempts" in
-    ''|*[!0-9]*) max_attempts="$MAX_RESPAWNS" ;;
+  '' | *[!0-9]*) max_attempts="$MAX_RESPAWNS" ;;
   esac
 
   effective_merge_method="$MERGE_METHOD"
   case "$task_merge_method" in
-    merge|squash|rebase)
-      effective_merge_method="$task_merge_method"
-      ;;
+  merge | squash | rebase)
+    effective_merge_method="$task_merge_method"
+    ;;
   esac
 
   if [[ -z "$id" || -z "$tmux_session" || -z "$branch" ]]; then
     alerts+=("$id: invalid task record (missing id/tmuxSession/branch)")
     continue
+  fi
+
+  if ! is_fully_qualified_model_ref "$model"; then
+    alerts+=("$id: invalid model '$model' (expected provider/model). Marking needs-human.")
+    updated_task="$(jq --arg status "needs-human" --arg blockingReason "invalid model format: expected provider/model" --argjson lastCheckedAt "$NOW_MS" '.status=$status | .blockingReason=$blockingReason | .lastCheckedAt=$lastCheckedAt' <<<"$task")"
+    TASKS_JSON="$(jq --argjson task "$updated_task" ".[$i] = \$task" <<<"$TASKS_JSON")"
+    continue
+  fi
+
+  if [[ -n "$fallback_model" ]] && ! is_fully_qualified_model_ref "$fallback_model"; then
+    alerts+=("$id: ignoring invalid fallback model '$fallback_model' (expected provider/model)")
+    fallback_model=""
   fi
 
   if [[ "$status" == "complete" || "$status" == "cancelled" ]]; then
@@ -473,17 +559,17 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     pr_detail="$(pr_view_json "$repo" "$(jq -r '.number' <<<"$open_pr_item")")"
     pr_updated_at_ms="$(jq -r 'try ((.updatedAt // "" | if . == "" then 0 else (fromdateiso8601 * 1000 | floor) end)) catch 0' <<<"$pr_detail")"
     case "$pr_updated_at_ms" in
-      ''|*[!0-9]*) pr_updated_at_ms="0" ;;
+    '' | *[!0-9]*) pr_updated_at_ms="0" ;;
     esac
 
     merge_state="$(jq -r '.mergeStateStatus // "UNKNOWN"' <<<"$pr_detail")"
     case "$merge_state" in
-      CLEAN|HAS_HOOKS|UNSTABLE)
-        branch_mergeable="true"
-        ;;
-      *)
-        branch_mergeable="false"
-        ;;
+    CLEAN | HAS_HOOKS | UNSTABLE)
+      branch_mergeable="true"
+      ;;
+    *)
+      branch_mergeable="false"
+      ;;
     esac
 
     checks_total="$(jq '[.statusCheckRollup[]?] | length' <<<"$pr_detail")"
@@ -525,7 +611,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
 
     critical_sources=()
     critical_details=()
-    if [[ "$codex_latest_state" == "CHANGES_REQUESTED" ]]; then
+    if reviewer_required "codex" "$ai_reviewers_csv" && [[ "$codex_latest_state" == "CHANGES_REQUESTED" ]]; then
       critical_sources+=("Codex")
       codex_comment_clean="$(normalize_prompt_text "$codex_latest_comment")"
       if [[ -n "$codex_comment_clean" ]]; then
@@ -534,7 +620,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
         critical_details+=("- Codex: changes requested (no review body provided)")
       fi
     fi
-    if [[ "$gemini_latest_state" == "CHANGES_REQUESTED" ]]; then
+    if reviewer_required "gemini" "$ai_reviewers_csv" && [[ "$gemini_latest_state" == "CHANGES_REQUESTED" ]]; then
       critical_sources+=("Gemini")
       gemini_comment_clean="$(normalize_prompt_text "$gemini_latest_comment")"
       if [[ -n "$gemini_comment_clean" ]]; then
@@ -543,7 +629,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
         critical_details+=("- Gemini: changes requested (no review body provided)")
       fi
     fi
-    if [[ "$copilot_latest_state" == "CHANGES_REQUESTED" ]]; then
+    if reviewer_required "copilot" "$ai_reviewers_csv" && [[ "$copilot_latest_state" == "CHANGES_REQUESTED" ]]; then
       critical_sources+=("Copilot")
       copilot_comment_clean="$(normalize_prompt_text "$copilot_latest_comment")"
       if [[ -n "$copilot_comment_clean" ]]; then
@@ -555,11 +641,21 @@ for (( i=0; i<TASK_COUNT; i++ )); do
 
     if [[ ${#critical_sources[@]} -gt 0 ]]; then
       critical_review_feedback="true"
-      critical_review_sources="$(IFS=', '; echo "${critical_sources[*]}")"
+      critical_review_sources="$(
+        IFS=', '
+        echo "${critical_sources[*]}"
+      )"
       critical_review_details="$(printf '%s\n' "${critical_details[@]}")"
     fi
 
-    if [[ -z "$codex_latest_state" && -z "$gemini_latest_state" && -z "$copilot_latest_state" ]]; then
+    ai_review_request_needed="false"
+    if reviewer_required "codex" "$ai_reviewers_csv" && [[ -z "$codex_latest_state" ]]; then
+      ai_review_request_needed="true"
+    fi
+    if reviewer_required "gemini" "$ai_reviewers_csv" && [[ -z "$gemini_latest_state" ]]; then
+      ai_review_request_needed="true"
+    fi
+    if reviewer_required "copilot" "$ai_reviewers_csv" && [[ -z "$copilot_latest_state" ]]; then
       ai_review_request_needed="true"
     fi
 
@@ -684,9 +780,27 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     fi
   fi
 
-  ai_reviews_passed="false"
-  if [[ "$codex_review_passed" == "true" && "$gemini_review_passed" == "true" && "$copilot_review_passed" == "true" ]]; then
-    ai_reviews_passed="true"
+  if [[ "$tmux_alive" == "true" ]]; then
+    pane_snapshot_raw="$(capture_pane_snapshot "$tmux_session" "$CAPTURE_PANE_LINES")"
+    pane_snapshot_norm="$(normalize_prompt_text "$pane_snapshot_raw")"
+    if [[ "${#pane_snapshot_norm}" -gt 1500 ]]; then
+      pane_snapshot_norm="${pane_snapshot_norm:0:1500} ... [truncated pane snapshot]"
+    fi
+    if [[ -n "$pane_snapshot_norm" ]]; then
+      last_pane_snippet="$pane_snapshot_norm"
+      last_pane_captured_at_json="$NOW_MS"
+    fi
+  fi
+
+  ai_reviews_passed="true"
+  if reviewer_required "codex" "$ai_reviewers_csv" && [[ "$codex_review_passed" != "true" ]]; then
+    ai_reviews_passed="false"
+  fi
+  if reviewer_required "gemini" "$ai_reviewers_csv" && [[ "$gemini_review_passed" != "true" ]]; then
+    ai_reviews_passed="false"
+  fi
+  if reviewer_required "copilot" "$ai_reviewers_csv" && [[ "$copilot_review_passed" != "true" ]]; then
+    ai_reviews_passed="false"
   fi
 
   ai_gate_ready="false"
@@ -694,11 +808,11 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     ai_gate_ready="true"
   fi
 
-  if [[ "$ai_gate_ready" != "true" ]]; then
+  if [[ "$ai_gate_ready" != "true" || "$REQUIRE_HUMAN_REVIEW" != "true" ]]; then
     human_review_requested_at_json="null"
   fi
 
-  if [[ "$has_open_pr" == "true" && "$human_review_state" == "changes-requested" ]]; then
+  if [[ "$REQUIRE_HUMAN_REVIEW" == "true" && "$has_open_pr" == "true" && "$human_review_state" == "changes-requested" ]]; then
     human_feedback_clean="$(normalize_prompt_text "$human_review_feedback")"
     if [[ -n "$human_feedback_clean" ]]; then
       human_review_details="- ${human_feedback_clean}"
@@ -729,10 +843,10 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   fi
 
   if [[ "$ai_review_request_needed" == "true" ]]; then
-    followup_issue_lines+=("- AI review request missing; run ./scripts/request-ai-reviews.sh --reviewers \"github-copilot[bot],codex,gemini\"")
+    followup_issue_lines+=("- AI review request missing; run ./scripts/request-ai-reviews.sh --reviewers \"${ai_reviewers_csv}\"")
   fi
 
-  if [[ "$has_open_pr" == "true" && "$human_review_state" == "changes-requested" ]]; then
+  if [[ "$REQUIRE_HUMAN_REVIEW" == "true" && "$has_open_pr" == "true" && "$human_review_state" == "changes-requested" ]]; then
     followup_issue_lines+=("- Human review requested changes")
   fi
 
@@ -743,7 +857,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   combined_followup_message=""
   followup_kind=""
   requires_followup="false"
-  if [[ "$has_open_pr" == "true" && ( "$ci_failing" == "true" || "$critical_review_feedback" == "true" || "$pending_human_followup" == "true" || "$ai_review_request_needed" == "true" ) ]]; then
+  if [[ "$has_open_pr" == "true" && ("$ci_failing" == "true" || "$critical_review_feedback" == "true" || "$ai_review_request_needed" == "true" || ("$REQUIRE_HUMAN_REVIEW" == "true" && "$pending_human_followup" == "true")) ]]; then
     requires_followup="true"
   fi
 
@@ -780,14 +894,14 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     now_ms="$NOW_MS"
     last_followup_at_ms="$(jq -r 'if . == null then 0 else . end' <<<"$last_followup_at_json")"
     case "$last_followup_at_ms" in
-      ''|*[!0-9]*) last_followup_at_ms="0" ;;
+    '' | *[!0-9]*) last_followup_at_ms="0" ;;
     esac
 
     followup_cooldown_ms="$((FOLLOWUP_COOLDOWN_MINUTES * 60 * 1000))"
     followup_hash="$(hash_message "$combined_followup_message")"
 
     should_send_followup="false"
-    if [[ "$pending_human_followup" == "true" ]]; then
+    if [[ "$REQUIRE_HUMAN_REVIEW" == "true" && "$pending_human_followup" == "true" ]]; then
       should_send_followup="true"
     elif [[ "$followup_hash" != "$last_followup_hash" ]]; then
       if [[ "$last_followup_at_ms" -eq 0 || $((now_ms - last_followup_at_ms)) -ge "$followup_cooldown_ms" ]]; then
@@ -824,7 +938,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
           alerts+=("$id: sent structured follow-up prompt to subagent")
         fi
 
-        if [[ "$pending_human_followup" == "true" ]]; then
+        if [[ "$REQUIRE_HUMAN_REVIEW" == "true" && "$pending_human_followup" == "true" ]]; then
           pending_human_followup="false"
           human_review_state="changes-requested"
           human_review_requested_at_json="null"
@@ -858,19 +972,19 @@ for (( i=0; i<TASK_COUNT; i++ )); do
   if [[ "$ci_pending" == "true" ]]; then
     reasons+=("CI checks pending")
   fi
-  if [[ "$codex_review_passed" != "true" && "$has_open_pr" == "true" ]]; then
+  if reviewer_required "codex" "$ai_reviewers_csv" && [[ "$codex_review_passed" != "true" && "$has_open_pr" == "true" ]]; then
     reasons+=("Codex review pending")
   fi
-  if [[ "$gemini_review_passed" != "true" && "$has_open_pr" == "true" ]]; then
+  if reviewer_required "gemini" "$ai_reviewers_csv" && [[ "$gemini_review_passed" != "true" && "$has_open_pr" == "true" ]]; then
     reasons+=("Gemini review pending")
   fi
-  if [[ "$copilot_review_passed" != "true" && "$has_open_pr" == "true" ]]; then
+  if reviewer_required "copilot" "$ai_reviewers_csv" && [[ "$copilot_review_passed" != "true" && "$has_open_pr" == "true" ]]; then
     reasons+=("Copilot review pending")
   fi
   if [[ "$ai_review_request_needed" == "true" ]]; then
     reasons+=("AI review request not submitted yet")
   fi
-  if [[ "$has_open_pr" == "true" && "$human_review_state" == "changes-requested" ]]; then
+  if [[ "$REQUIRE_HUMAN_REVIEW" == "true" && "$has_open_pr" == "true" && "$human_review_state" == "changes-requested" ]]; then
     reasons+=("human review requested changes")
   fi
   if [[ "$screenshots_included" != "true" ]]; then
@@ -879,14 +993,48 @@ for (( i=0; i<TASK_COUNT; i++ )); do
 
   blocking_reason=""
   if [[ ${#reasons[@]} -gt 0 ]]; then
-    blocking_reason="$(IFS='; '; echo "${reasons[*]}")"
+    blocking_reason="$(
+      IFS='; '
+      echo "${reasons[*]}"
+    )"
   fi
 
   new_status="$status"
 
   if [[ "$has_open_pr" == "true" ]]; then
     if [[ "$ai_gate_ready" == "true" ]]; then
-      if [[ "$human_review_state" == "approved" ]]; then
+      if [[ "$REQUIRE_HUMAN_REVIEW" != "true" ]]; then
+        human_review_state="skipped"
+        pending_human_followup="false"
+        human_review_feedback=""
+        if [[ "$DRY_RUN" == "true" ]]; then
+          new_status="running"
+          alerts+=("$id: CI+AI gates passed; would auto-merge on non-dry-run")
+        else
+          if merge_pr "$repo" "$(jq -r '.number' <<<"$open_pr_item")" "$effective_merge_method"; then
+            merged_at_json="$NOW_MS"
+            completed_at_json="$NOW_MS"
+            new_status="complete"
+            blocking_reason=""
+
+            if [[ "$close_session_on_merge" == "true" ]]; then
+              if tmux has-session -t "$tmux_session" 2>/dev/null; then
+                tmux kill-session -t "$tmux_session" || true
+              fi
+              tmux_alive="false"
+            fi
+
+            alerts+=("$id: auto-merged PR after CI+AI gates and closed session")
+            if [[ "$notify_on_complete" == "true" ]]; then
+              alerts+=("$id: complete (${pr_url:-no-pr-url})")
+            fi
+          else
+            new_status="needs-human"
+            blocking_reason="failed to auto-merge PR after CI+AI gates"
+            alerts+=("$id: failed to auto-merge PR; human intervention required")
+          fi
+        fi
+      elif [[ "$human_review_state" == "approved" ]]; then
         if [[ "$DRY_RUN" == "true" ]]; then
           new_status="waiting-human-review"
           alerts+=("$id: human approved; would merge PR on non-dry-run")
@@ -989,9 +1137,11 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     --arg mergeMethod "$effective_merge_method" \
     --arg humanReviewState "$human_review_state" \
     --arg humanReviewFeedback "$human_review_feedback" \
+    --arg aiReviewers "$ai_reviewers_csv" \
     --arg model "$model" \
     --arg fallbackModel "$fallback_model" \
     --arg respawnCommand "$respawn_command" \
+    --arg lastPaneSnippet "$last_pane_snippet" \
     --arg lastFollowupMessage "$last_followup_message" \
     --arg lastFollowupHash "$last_followup_hash" \
     --argjson hasPr "$has_open_pr" \
@@ -1010,6 +1160,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     --argjson tmuxAlive "$tmux_alive" \
     --argjson aiReviewsPassed "$ai_reviews_passed" \
     --argjson aiGateReady "$ai_gate_ready" \
+    --argjson requireHumanReview "$REQUIRE_HUMAN_REVIEW" \
     --argjson respawnAttempts "$respawn_attempts" \
     --argjson pendingHumanFollowup "$pending_human_followup" \
     --argjson fallbackActivated "$fallback_activated" \
@@ -1020,6 +1171,7 @@ for (( i=0; i<TASK_COUNT; i++ )); do
     --argjson lastHeartbeatAt "$last_heartbeat_json" \
     --argjson lastRespawnAt "$last_respawn_at_json" \
     --argjson fallbackActivatedAt "$fallback_activated_at_json" \
+    --argjson lastPaneCapturedAt "$last_pane_captured_at_json" \
     --argjson lastFollowupAt "$last_followup_at_json" \
     --argjson lastPrOpenNudgeAt "$last_pr_open_nudge_at_json" \
     --argjson humanReviewRequestedAt "$human_review_requested_at_json" \
@@ -1047,12 +1199,16 @@ for (( i=0; i<TASK_COUNT; i++ )); do
       | .tmuxAlive = $tmuxAlive
       | .aiReviewsPassed = $aiReviewsPassed
       | .aiGateReady = $aiGateReady
+      | .requireHumanReview = $requireHumanReview
       | .respawnAttempts = $respawnAttempts
       | .mergeMethod = $mergeMethod
       | .closeSessionOnMerge = $closeSessionOnMerge
+      | .aiReviewers = $aiReviewers
       | .model = $model
       | .fallbackModel = $fallbackModel
       | .respawnCommand = $respawnCommand
+      | .lastPaneSnippet = $lastPaneSnippet
+      | .lastPaneCapturedAt = $lastPaneCapturedAt
       | .humanReviewState = $humanReviewState
       | .humanReviewFeedback = $humanReviewFeedback
       | .pendingHumanFollowup = $pendingHumanFollowup
@@ -1079,7 +1235,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "Dry run: task file not modified"
 else
   tmp_out="$(mktemp)"
-  printf '%s\n' "$TASKS_JSON" > "$tmp_out"
+  printf '%s\n' "$TASKS_JSON" >"$tmp_out"
   mv "$tmp_out" "$TASK_FILE_ABS"
   echo "Updated task file: $TASK_FILE_ABS"
 fi

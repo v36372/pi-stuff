@@ -36,6 +36,7 @@ Start a Ralph loop immediately and keep iterating until the PR is opened.
   - call `ralph_done` to continue loop
 
 Stop the Ralph loop only when all are true:
+
 - PR exists for this branch
 - PR is non-draft
 - PR description summarizes assumptions + validation run
@@ -47,7 +48,8 @@ After PR creation, stay in the same tmux session and wait for orchestrator follo
 - Do not create a second PR for the same task.
 - Continue using the same branch/PR after follow-up prompts.
 - Immediately after opening PR, request automated AI reviews:
-  - `./scripts/request-ai-reviews.sh --reviewers "github-copilot[bot],codex,gemini"`
+  - `./scripts/request-ai-reviews.sh --reviewers "{{AI_REVIEWERS_CSV}}"`
+  - If reviewers are not explicitly provided in prompt vars, default to `copilot,codex,gemini`.
   - If running from a copied skill path, use the local equivalent script path.
 
 ## Quality baseline
@@ -60,6 +62,7 @@ After PR creation, stay in the same tmux session and wait for orchestrator follo
 ## Response format to orchestrator
 
 At each key milestone, post concise updates:
+
 - done
 - validating
 - blocked (if any)

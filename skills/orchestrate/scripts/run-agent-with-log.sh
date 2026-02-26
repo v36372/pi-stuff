@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: run-agent-with-log.sh <agent-label> <model> <thinking>
-# Example: run-agent-with-log.sh T01 gpt-5.3-codex high
+# Usage: run-agent-with-log.sh <agent-label> <provider/model> <thinking>
+# Example: run-agent-with-log.sh T01 openai/gpt-5.3-codex high
 
 AGENT="${1:-agent}"
-MODEL="${2:-gpt-5.3-codex}"
+MODEL_REF="${2:-openai/gpt-5.3-codex}"
 THINKING="${3:-medium}"
 
-# Map model to provider
-case "$MODEL" in
-  gpt-*|o1-*|o3-*|o4-*)
-    PROVIDER="openai"
-    ;;
-  claude-*|anthropic/*)
-    PROVIDER="anthropic"
-    ;;
-  gemini-*|google/*)
-    PROVIDER="google"
-    ;;
-  *)
-    # Default to openai for codex models
-    PROVIDER="openai"
-    ;;
-esac
+if [[ "$MODEL_REF" != */* ]]; then
+  echo "Model must be fully-qualified as <provider>/<model>, got: $MODEL_REF" >&2
+  exit 1
+fi
+
+PROVIDER="${MODEL_REF%%/*}"
+MODEL="${MODEL_REF#*/}"
+
+if [[ -z "$PROVIDER" || -z "$MODEL" ]]; then
+  echo "Invalid model reference: $MODEL_REF" >&2
+  exit 1
+fi
 
 # Log file in the current working directory
 LOG_DIR=".pi/logs"
@@ -31,7 +27,7 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/${AGENT}-$(date +%Y%m%d-%H%M%S).log"
 
 echo "Starting agent: $AGENT"
-echo "Model: $MODEL (provider: $PROVIDER)"
+echo "Model: $MODEL_REF (provider: $PROVIDER)"
 echo "Thinking: $THINKING"
 echo "Log: $LOG_FILE"
 echo "Working directory: $(pwd)"

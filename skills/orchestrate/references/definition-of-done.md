@@ -24,17 +24,18 @@ All required checks are green:
 
 ## 4) AI review gates
 
-Required review approvals:
+Required review approvals are determined by task `aiReviewers` (default `copilot,codex,gemini`).
 
-- Codex review approved
-- Gemini review approved
-- Copilot review approved
+Examples:
+- if `aiReviewers=copilot,codex,gemini`, all three approvals are required
+- if `aiReviewers=codex,gemini`, Copilot is not required
 
-If any of these request changes, the task is not done.
+If any required reviewer requests changes, the task is not done.
 
-## 5) Human review gate
+## 5) Human review gate (policy-dependent)
 
-- Human reviewer explicitly approves the PR.
+- If monitor runs with `--require-human-review true`, human reviewer must explicitly approve the PR.
+- If monitor runs with `--require-human-review false`, this gate is skipped.
 - If human requests changes, subagent addresses feedback and re-enters CI + AI review loop.
 
 ## 6) Merge + session closure

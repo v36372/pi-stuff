@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  verify-done-gate.sh --task-id <id> [--task-file <path>] [--base-branch <main>]
+  verify-done-gate.sh --task-id <id> [--task-file <path>] [--base-branch <main>] [--require-human-review <true|false>]
 
 Verifies orchestrate definition-of-done gates for one task.
 Exits non-zero when any required gate fails.
@@ -14,6 +14,7 @@ EOF
 TASK_ID=""
 TASK_FILE=".pi/active-tasks.json"
 BASE_BRANCH="main"
+REQUIRE_HUMAN_REVIEW="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --base-branch)
       BASE_BRANCH="${2:-}"
+      shift 2
+      ;;
+    --require-human-review)
+      REQUIRE_HUMAN_REVIEW="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -45,6 +50,14 @@ if [[ -z "$TASK_ID" ]]; then
   echo "--task-id is required" >&2
   exit 1
 fi
+
+case "$REQUIRE_HUMAN_REVIEW" in
+  true|false) ;;
+  *)
+    echo "--require-human-review must be true or false" >&2
+    exit 1
+    ;;
+esac
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "Missing command: jq" >&2
@@ -86,6 +99,19 @@ repo="$(jq -r '.repo // ""' <<<"$task")"
 pr_number="$(jq -r '.prNumber // empty' <<<"$task")"
 pr_url="$(jq -r '.prUrl // ""' <<<"$task")"
 human_review_state="$(jq -r '.humanReviewState // "pending"' <<<"$task")"
+ai_reviewers_csv="$(jq -r '.aiReviewers // "copilot,codex,gemini"' <<<"$task" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | sed 's/,,*/,/g; s/^,//; s/,$//')"
+if [[ -z "$ai_reviewers_csv" ]]; then
+  ai_reviewers_csv="copilot,codex,gemini"
+fi
+for reviewer in ${ai_reviewers_csv//,/ }; do
+  case "$reviewer" in
+    copilot|codex|gemini) ;;
+    *)
+      echo "Unsupported aiReviewers entry in task: $reviewer" >&2
+      exit 1
+      ;;
+  esac
+done
 status="$(jq -r '.status // "running"' <<<"$task")"
 
 if [[ -z "$pr_number" && -n "$pr_url" ]]; then
@@ -130,6 +156,12 @@ if [[ "$checks_pending" -gt 0 ]]; then
   failures+=("CI checks still pending")
 fi
 
+reviewer_required() {
+  local reviewer="$1"
+  local csv="$2"
+  [[ ",${csv}," == *",${reviewer},"* ]]
+}
+
 latest_state_for() {
   local key="$1"
   jq -r --arg key "$key" '[.reviews[]? | select((.author.login // "" | ascii_downcase | contains($key))) | {s:(.state // ""), t:(.submittedAt // .submitted_at // "")}] | sort_by(.t) | (last | .s) // ""' <<<"$pr"
@@ -139,12 +171,20 @@ codex_state="$(latest_state_for codex)"
 gemini_state="$(latest_state_for gemini)"
 copilot_state="$(latest_state_for copilot)"
 
-[[ "$codex_state" == "APPROVED" ]] || failures+=("Codex review not approved")
-[[ "$gemini_state" == "APPROVED" ]] || failures+=("Gemini review not approved")
-[[ "$copilot_state" == "APPROVED" ]] || failures+=("Copilot review not approved")
+if reviewer_required "codex" "$ai_reviewers_csv"; then
+  [[ "$codex_state" == "APPROVED" ]] || failures+=("Codex review not approved")
+fi
+if reviewer_required "gemini" "$ai_reviewers_csv"; then
+  [[ "$gemini_state" == "APPROVED" ]] || failures+=("Gemini review not approved")
+fi
+if reviewer_required "copilot" "$ai_reviewers_csv"; then
+  [[ "$copilot_state" == "APPROVED" ]] || failures+=("Copilot review not approved")
+fi
 
-if [[ "$human_review_state" != "approved" ]]; then
-  failures+=("Human review state is '$human_review_state' (expected approved)")
+if [[ "$REQUIRE_HUMAN_REVIEW" == "true" ]]; then
+  if [[ "$human_review_state" != "approved" ]]; then
+    failures+=("Human review state is '$human_review_state' (expected approved)")
+  fi
 fi
 
 ui_changed="$(jq -r '[.files[]?.path | ascii_downcase | select(test("\\.(css|scss|sass|less|html|jsx|tsx|vue|svelte)$") or test("(^|/)(ui|components|pages|screens|frontend|web)(/|$)"))] | length > 0' <<<"$pr")"

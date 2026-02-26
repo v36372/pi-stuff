@@ -12,8 +12,9 @@ Usage:
     --branch <branch> \
     --tmux-session <name> \
     --agent <label> \
-    --model <model-id> \
-    [--fallback-model <model-id>] \
+    --model <provider/model> \
+    [--fallback-model <provider/model>] \
+    [--ai-reviewers <csv>] \
     [--thinking <low|medium|high>] \
     [--base-ref <ref>] \
     [--install-command <command>] \
@@ -29,7 +30,8 @@ Usage:
     [--initial-prompt-delay <seconds>]
 
 Environment:
-  RUN_AGENT_SCRIPT  Path to run-agent-with-log.sh (default: scripts/run-agent-with-log.sh)
+  RUN_AGENT_SCRIPT         Path to run-agent-with-log.sh (default: sibling script in this skill)
+  ORCHESTRATE_AI_REVIEWERS Default reviewers CSV when --ai-reviewers is omitted (default: copilot,codex,gemini)
 EOF
 }
 
@@ -39,6 +41,69 @@ require_command() {
     echo "Missing required command: $cmd" >&2
     exit 1
   fi
+}
+
+validate_model_ref() {
+  local model_ref="$1"
+  local label="$2"
+
+  if [[ -z "$model_ref" ]]; then
+    return 0
+  fi
+
+  if [[ "$model_ref" != */* ]]; then
+    echo "$label must be fully-qualified as <provider>/<model>, got: $model_ref" >&2
+    exit 1
+  fi
+
+  local provider="${model_ref%%/*}"
+  local model="${model_ref#*/}"
+
+  if [[ -z "$provider" || -z "$model" ]]; then
+    echo "$label is invalid: $model_ref" >&2
+    exit 1
+  fi
+}
+
+validate_model_is_logged_in() {
+  local model_ref="$1"
+  local label="$2"
+  local script_path="$3"
+
+  [[ -z "$model_ref" ]] && return 0
+
+  if [[ ! -x "$script_path" ]]; then
+    echo "Model validation helper not found or not executable: $script_path" >&2
+    exit 1
+  fi
+
+  if ! "$script_path" --ids | grep -Fxq "$model_ref"; then
+    echo "$label is not in logged-in model list: $model_ref" >&2
+    echo "Allowed values (provider/model):" >&2
+    "$script_path" --ids >&2 || true
+    exit 1
+  fi
+}
+
+validate_ai_reviewers() {
+  local csv="$1"
+  IFS=',' read -r -a reviewers <<< "$csv"
+
+  if [[ ${#reviewers[@]} -eq 0 ]]; then
+    echo "--ai-reviewers cannot be empty" >&2
+    exit 1
+  fi
+
+  for reviewer in "${reviewers[@]}"; do
+    case "$reviewer" in
+      copilot|codex|gemini) ;;
+      *)
+        echo "Unsupported reviewer in --ai-reviewers: $reviewer" >&2
+        echo "Supported reviewers: copilot,codex,gemini" >&2
+        exit 1
+        ;;
+    esac
+  done
 }
 
 compact_prompt_for_tmux() {
@@ -72,6 +137,7 @@ TMUX_SESSION=""
 AGENT=""
 MODEL=""
 FALLBACK_MODEL=""
+AI_REVIEWERS="${ORCHESTRATE_AI_REVIEWERS:-copilot,codex,gemini}"
 THINKING="medium"
 BASE_REF="origin/main"
 INSTALL_COMMAND="pnpm install"
@@ -122,6 +188,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --fallback-model)
     FALLBACK_MODEL="${2:-}"
+    shift 2
+    ;;
+  --ai-reviewers)
+    AI_REVIEWERS="${2:-}"
     shift 2
     ;;
   --thinking)
@@ -240,6 +310,9 @@ if [[ -n "$FALLBACK_MODEL" && "$FALLBACK_MODEL" == "$MODEL" ]]; then
   FALLBACK_MODEL=""
 fi
 
+AI_REVIEWERS="$(printf '%s' "$AI_REVIEWERS" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' | sed 's/,,*/,/g; s/^,//; s/,$//')"
+validate_ai_reviewers "$AI_REVIEWERS"
+
 require_command git
 require_command tmux
 require_command jq
@@ -250,11 +323,19 @@ if [[ -z "$ROOT_DIR" ]]; then
   exit 1
 fi
 
-RUN_AGENT_SCRIPT="${RUN_AGENT_SCRIPT:-scripts/run-agent-with-log.sh}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RUN_AGENT_SCRIPT="${RUN_AGENT_SCRIPT:-$SCRIPT_DIR/run-agent-with-log.sh}"
 if [[ ! -x "$RUN_AGENT_SCRIPT" ]]; then
   echo "RUN_AGENT_SCRIPT is missing or not executable: $RUN_AGENT_SCRIPT" >&2
   exit 1
 fi
+
+validate_model_ref "$MODEL" "--model"
+validate_model_ref "$FALLBACK_MODEL" "--fallback-model"
+
+MODEL_LIST_SCRIPT="$SCRIPT_DIR/list-logged-in-models.sh"
+validate_model_is_logged_in "$MODEL" "--model" "$MODEL_LIST_SCRIPT"
+validate_model_is_logged_in "$FALLBACK_MODEL" "--fallback-model" "$MODEL_LIST_SCRIPT"
 
 if [[ "$WORKTREE" = /* ]]; then
   WORKTREE_ABS="$WORKTREE"
@@ -363,6 +444,7 @@ TASK_JSON="$(jq -n \
   --arg model "$MODEL" \
   --arg thinking "$THINKING" \
   --arg fallbackModel "$FALLBACK_MODEL" \
+  --arg aiReviewers "$AI_REVIEWERS" \
   --arg description "$DESCRIPTION" \
   --arg repo "$REPO" \
   --arg worktree "$WORKTREE" \
@@ -387,6 +469,7 @@ TASK_JSON="$(jq -n \
     agent: $agent,
     model: $model,
     fallbackModel: $fallbackModel,
+    aiReviewers: $aiReviewers,
     thinking: $thinking,
     description: $description,
     repo: $repo,
@@ -409,10 +492,13 @@ TASK_JSON="$(jq -n \
     closeSessionOnMerge: true,
     followupCount: 0,
     prOpenNudgeCount: 0,
+    lastPaneSnippet: "",
+    lastPaneCapturedAt: null,
     lastFollowupAt: null,
     lastPrOpenNudgeAt: null,
     lastFollowupMessage: "",
     lastFollowupHash: "",
+    requireHumanReview: false,
     humanReviewState: "pending",
     humanReviewFeedback: "",
     pendingHumanFollowup: false,

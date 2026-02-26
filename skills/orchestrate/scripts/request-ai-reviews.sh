@@ -15,12 +15,12 @@ Usage:
 Requests automated AI reviewers for an open PR using gh CLI.
 
 Defaults:
-- --reviewers: ORCHESTRATE_AI_REVIEWERS env or "github-copilot[bot],codex,gemini"
+- --reviewers: ORCHESTRATE_AI_REVIEWERS env or "copilot,codex,gemini"
 - --branch: current git branch (when --pr is not provided)
 
 Examples:
-  request-ai-reviews.sh --reviewers "github-copilot[bot],codex,gemini"
-  request-ai-reviews.sh --pr 123 --repo owner/repo --reviewers "github-copilot[bot],codex,gemini"
+  request-ai-reviews.sh --reviewers "copilot,codex,gemini"
+  request-ai-reviews.sh --pr 123 --repo owner/repo --reviewers "copilot,codex,gemini"
 EOF
 }
 
@@ -42,45 +42,45 @@ trim() {
 PR_NUMBER=""
 BRANCH=""
 REPO=""
-REVIEWERS="${ORCHESTRATE_AI_REVIEWERS:-github-copilot[bot],codex,gemini}"
+REVIEWERS="${ORCHESTRATE_AI_REVIEWERS:-copilot,codex,gemini}"
 ADD_COMMENT="true"
 DRY_RUN="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --pr)
-      PR_NUMBER="${2:-}"
-      shift 2
-      ;;
-    --branch)
-      BRANCH="${2:-}"
-      shift 2
-      ;;
-    --repo)
-      REPO="${2:-}"
-      shift 2
-      ;;
-    --reviewers)
-      REVIEWERS="${2:-}"
-      shift 2
-      ;;
-    --no-comment)
-      ADD_COMMENT="false"
-      shift 1
-      ;;
-    --dry-run)
-      DRY_RUN="true"
-      shift 1
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage
-      exit 1
-      ;;
+  --pr)
+    PR_NUMBER="${2:-}"
+    shift 2
+    ;;
+  --branch)
+    BRANCH="${2:-}"
+    shift 2
+    ;;
+  --repo)
+    REPO="${2:-}"
+    shift 2
+    ;;
+  --reviewers)
+    REVIEWERS="${2:-}"
+    shift 2
+    ;;
+  --no-comment)
+    ADD_COMMENT="false"
+    shift 1
+    ;;
+  --dry-run)
+    DRY_RUN="true"
+    shift 1
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Unknown argument: $1" >&2
+    usage
+    exit 1
+    ;;
   esac
 done
 
@@ -122,7 +122,7 @@ else
   PR_URL=""
 fi
 
-IFS=',' read -r -a raw_reviewers <<< "$REVIEWERS"
+IFS=',' read -r -a raw_reviewers <<<"$REVIEWERS"
 reviewers=()
 for reviewer in "${raw_reviewers[@]}"; do
   reviewer_trimmed="$(trim "$reviewer")"
@@ -190,11 +190,17 @@ if [[ "$ADD_COMMENT" == "true" ]]; then
 fi
 
 if [[ ${#added_reviewers[@]} -gt 0 ]]; then
-  echo "Requested reviewers: $(IFS=', '; echo "${added_reviewers[*]}")"
+  echo "Requested reviewers: $(
+    IFS=', '
+    echo "${added_reviewers[*]}"
+  )"
 fi
 
 if [[ ${#failed_reviewers[@]} -gt 0 ]]; then
-  echo "Failed to request reviewers: $(IFS=', '; echo "${failed_reviewers[*]}")" >&2
+  echo "Failed to request reviewers: $(
+    IFS=', '
+    echo "${failed_reviewers[*]}"
+  )" >&2
 fi
 
 if [[ ${#added_reviewers[@]} -eq 0 ]]; then

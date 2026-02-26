@@ -7,7 +7,7 @@ Usage:
   list-logged-in-models.sh [--ids] [search]
 
 Options:
-  --ids     Print only model IDs (one per line, no header)
+  --ids     Print only fully-qualified model IDs as <provider>/<model> (one per line, no header)
 
 Description:
   Lists models only for providers that are currently logged in in ~/.pi/agent/auth.json.
@@ -86,8 +86,8 @@ if [[ "$IDS_ONLY" == "true" ]]; then
       for (i in p) allowed[p[i]] = 1;
     }
     NR == 1 { next }
-    allowed[$1] { print $2 }
-  '
+    allowed[$1] { print $1 "/" $2 }
+  ' | sort -u
 else
   "${LIST_CMD[@]}" | awk -v providers="$PROVIDERS_CSV" '
     BEGIN {
