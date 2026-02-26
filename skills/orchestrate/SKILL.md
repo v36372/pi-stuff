@@ -1,398 +1,60 @@
 ---
 name: orchestrate
 description: Orchestrates end-to-end execution of detailed engineering plans by rescoping to small/medium tasks, running low-concurrency subagent waves with user-selected models, and managing autonomous PR-to-merge loops with monitor-driven follow-up control.
-compatibility: Requires git, tmux, gh, jq, br, and scripts/run-agent-with-log.sh.
+compatibility: Requires git, tmux, gh, jq, br
 ---
 
 # Orchestrate
 
-Use this skill for end-to-end delivery of a complete idea (not just a single feature).
+Use this skill for end-to-end delivery of a complete idea (not a single feature).
 
-For detailed ops/playbooks, read references on demand:
+## References (read on demand)
 
-- `references/orchestrator-operations.md`
-- `references/definition-of-done.md`
+- `references/preflight.md` — **mandatory** preflight (script discovery + br init)
+- `references/interview.md` — interview flow + /answer usage + model selection prompt
+- `references/tasks-and-br.md` — rescope plan, task schema, br issue creation
+- `references/execution-and-spawn.md` — scheduling, prompt rendering, spawning
+- `references/monitoring.md` — monitor loop, review actions, dashboards
+- `references/active-task-record.md` — active task record schema
+- `references/orchestrator-operations.md` — detailed monitor behavior
+- `references/definition-of-done.md` — strict done gate
+- `references/br-field-mapping.md` — br label/status mapping
 
 ## Inputs
 
-- A plan or PRD markdown file path (required)
-- Project context files (README, package docs, architecture docs)
+- A plan/PRD markdown file path (required)
+- Project context files (README, architecture/docs)
 - User preferences (deadline, quality bar)
-- Maximum subagent concurrency (required before spawning)
-- User-approved model set for subagents (required before spawning, must be chosen from currently logged-in models as fully-qualified `provider/model` IDs)
-
-## Non-negotiable constraints
-
-1. Never keep tasks as **big**. Split until each task is **small** or **medium**.
-2. Every task must have explicit success criteria and validation steps.
-3. Get a single user sign-off on the rescoped + execution plan, then continue autonomously.
-4. PR creation is necessary but not sufficient for completion.
-5. Explicitly ask user for `maxConcurrency` before any spawn.
-6. Explicitly ask user which models are allowed before any spawn.
-7. Never spawn one subagent per task by default. Execute in waves capped by `maxConcurrency`.
-8. Prefer low concurrency for end-to-end initiatives (typically 1-3 unless user requests higher).
-9. Do not assign models outside the user-approved model set.
-10. During the interview, use interactive Q&A via the `answer.ts` extension when TUI is available; if unavailable, ask user to load it before proceeding.
-11. When asking user to pick subagent models, display only models from currently logged-in providers.
-12. After PR creation, keep tmux session alive until PR is merged.
-13. Maintain `.pi/orchestrate/tasks.json` as the machine source of truth for scheduling.
-14. Do not ask for repeated confirmation after startup approval unless blocked (`needs-human`) or user explicitly changes policy.
-15. Never bypass helper scripts for orchestration mechanics. If helper scripts are unavailable, stop and ask user to fix skill loading/path.
-
-## Workflow
-
-### 0) Skill script preflight (mandatory, run once per session)
-
-Before planning/spawning, resolve the helper script directory and verify it exists. Never proceed without this.
-
-```bash
-if [[ -x ./scripts/spawn-subagent.sh ]]; then
-  ORCHESTRATE_SCRIPTS_DIR="$(cd ./scripts && pwd)"
-elif [[ -x "$HOME/.pi/agent/skills/orchestrate/scripts/spawn-subagent.sh" ]]; then
-  ORCHESTRATE_SCRIPTS_DIR="$HOME/.pi/agent/skills/orchestrate/scripts"
-else
-  ORCHESTRATE_SCRIPTS_DIR="$(find "$HOME/.pi/agent/skills" -maxdepth 4 -type f -path "*/orchestrate/scripts/spawn-subagent.sh" -print -quit | xargs -r dirname)"
-fi
-
-if [[ -z "${ORCHESTRATE_SCRIPTS_DIR:-}" || ! -x "$ORCHESTRATE_SCRIPTS_DIR/spawn-subagent.sh" ]]; then
-  echo "Could not locate orchestrate helper scripts. Stop and ask user to load/install the skill path."
-  exit 1
-fi
-```
-
-After preflight, call helpers via `$ORCHESTRATE_SCRIPTS_DIR/<script>.sh` (absolute path), not `./scripts/...`.
-
-**br preflight** (run after the script check above):
-
-```bash
-if ! command -v br >/dev/null 2>&1; then
-  echo "br not found. Install with:"
-  echo '  curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/main/install.sh" | bash'
-  echo "Then re-run. br is required for task tracking."
-  exit 1
-fi
-
-# Initialize br workspace if not present
-if [[ ! -d .beads ]]; then
-  br init
-  # Use a short prefix for issue IDs (change to match initiative slug)
-  br config --set id.prefix=orch
-  echo "br workspace initialized in .beads/"
-fi
-```
-
-`br` is required for task tracking. See `references/br-field-mapping.md` for the full field mapping between orchestrate task fields and `br` equivalents.
-
-### 1) Intake + context
-
-1. Read the PRD/plan markdown file.
-2. Read key project context (README + relevant package docs).
-3. Summarize scope, assumptions, risks, and unknowns.
-
-### 2) Clarifying interview (short)
-
-Ask 4-7 high-impact questions only, then proceed with best-guess defaults if user is unsure. Prioritize:
-
-- Success outcomes and exclusions
-- UX/acceptance constraints
-- Performance/security constraints
-- Rollout and migration expectations
-- Review policy (AI reviewer set; default `copilot,codex,gemini`)
-- **Maximum allowed parallel subagents (`maxConcurrency`)**
-- **Allowed model pool for subagents + model preference by task difficulty**
-- **AI code reviewers (`aiReviewers`) as CSV; default `copilot,codex,gemini`**
-
-Interview flow:
-
-1. Ask all interview questions in one concise batch message.
-2. If interactive TUI is available, require answers through `answer.ts` via `/answer` (or `Ctrl+.`). If `answer.ts` is not loaded, ask the user to load it, then continue the interview.
-3. Before asking the model-selection question, run:
-   ```bash
-   "$ORCHESTRATE_SCRIPTS_DIR/list-logged-in-models.sh" --ids | nl -w2 -s') '
-   ```
-   Then show only those numbered model IDs (formatted as `provider/model`) as selectable options (use `templates/interview-model-selection-prompt.md`).
-4. Ask which AI code reviewers to use (`aiReviewers` CSV). Default is `copilot,codex,gemini` if user does not specify.
-5. If no logged-in models are found, stop and ask the user to run `/login`, then continue.
-
-If concurrency or allowed models are missing, do not plan execution yet. If `aiReviewers` is missing, default to `copilot,codex,gemini` and continue.
-
-### 3) Rescope plan
-
-Produce `.pi/orchestrate/rescoped-plan.md` with:
-
-- In-scope / out-of-scope
-- Milestones
-- Updated success criteria
-- Risks + mitigations
-
-### 4) Task decomposition
-
-Produce both:
-
-- `.pi/orchestrate/tasks.md` (human-readable)
-- `.pi/orchestrate/tasks.json` (machine source of truth used by scripts)
-- **`br` issues** (one per task — the dependency-aware, git-syncable source of truth)
-
-Each task must contain:
-
-- `id`
-- `brIssueId` — the `br` issue ID returned after `br create` (e.g. `bd-a1b2c3`)
-- `size`: `small | medium` (never `big`)
-- `difficulty`: `low | medium | high`
-- `dependencies`
-- `ownerModel` (from user-approved model pool)
-- `fallbackModel` (optional, also user-approved)
-- `expectedSuccessCriteria`
-- `validation` (lint/type/tests/e2e/review requirements)
-- `aiReviewers` (CSV, default `copilot,codex,gemini`)
-- `priority`
-- `status`: `queued | running | complete | cancelled`
-
-**Create each task in `br` during decomposition:**
-
-```bash
-# Create the br issue and capture its ID
-BR_JSON=$(br create "Task title" \
-  --type task \
-  --priority 1 \
-  --description "$(printf '%s\n\nSuccess criteria:\n%s\n\nValidation:\n%s' \
-      "$TASK_DESCRIPTION" "$SUCCESS_CRITERIA" "$VALIDATION_CMDS")" \
-  --json)
-BR_ISSUE_ID=$(echo "$BR_JSON" | jq -r '.id')
-
-# Apply orchestrate labels
-br label add "$BR_ISSUE_ID" \
-  "size:medium" \
-  "difficulty:high" \
-  "model:openai/gpt-5.3-codex" \
-  "fallback-model:google/gemini-2.5-pro" \
-  "reviewers:copilot,codex,gemini" \
-  "orch-id:$TASK_ID"
-
-# Wire dependencies (child depends on parent)
-br dep add "$BR_ISSUE_ID" "$PARENT_BR_ISSUE_ID"
-```
-
-Store `$BR_ISSUE_ID` as `brIssueId` in both `tasks.json` and the active-task record.
-
-See `references/br-field-mapping.md` for the priority/status/label mapping table.
-
-### 5) Capacity planning (low concurrency + model allocation)
-
-Produce `.pi/orchestrate/execution-plan.md` with:
-
-- `maxConcurrency` confirmed from user
-- user-approved model pool
-- model assignment policy by task type/difficulty
-- wave plan (`wave-1`, `wave-2`, ...)
-- active vs queued tasks
-
-Scheduling rules:
-
-- Running tasks must be `<= maxConcurrency`.
-- Keep non-active tasks in `queued` state.
-- Prioritize dependency-unblocked tasks.
-- Assign only models approved by the user.
-- Ensure approved models are a subset of `"$ORCHESTRATE_SCRIPTS_DIR/list-logged-in-models.sh" --ids` output.
-
-Use scheduler for deterministic wave picks. Pass `--use-br` to let `br ready --json` drive
-which tasks are eligible (dependency graph is resolved automatically by `br`):
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/schedule-wave.sh" \
-  --tasks-file .pi/orchestrate/tasks.json \
-  --active-task-file .pi/active-tasks.json \
-  --max-concurrency 2 \
-  --wave-label wave-1 \
-  --output .pi/orchestrate/next-wave.json \
-  --use-br
-```
-
-Without `--use-br`, the scheduler falls back to the dependency logic built into `tasks.json`
-(backward-compatible with initiatives that predate `br` integration).
-
-### 5.5) Single approval gate then autonomous mode
-
-Before spawning, show one concise approval packet containing:
-
-- rescoped summary
-- task table (id/size/model/deps)
-- execution policy (`maxConcurrency`, model pool, merge behavior)
-
-Ask for a single go/no-go. After go:
-
-- do not ask for recurring confirmations
-- continue execution + monitor loops until completion or hard blocker
-
-### 6) Prepare subagent prompt templates
-
-Create prompts from:
-
-- `templates/subagent-initial-prompt.md`
-- `templates/subagent-followup-prompt.md`
-
-Write task-specific initial prompts to:
-
-- `.pi/orchestrate/prompts/<task-id>.md`
-
-Use renderer to avoid placeholder mistakes:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/render-subagent-prompt.sh" \
-  --template "$ORCHESTRATE_SCRIPTS_DIR/../templates/subagent-initial-prompt.md" \
-  --output .pi/orchestrate/prompts/<task-id>.md \
-  --var TASK_ID=<task-id> \
-  --var TASK_DESCRIPTION="<description>" \
-  --var AI_REVIEWERS_CSV="<aiReviewers-csv>"
-```
-
-Include concrete paths, constraints, and current initiative context.
-
-The initial template requires the subagent to run a Ralph loop (`task-<id>-to-pr`) until a non-draft PR is opened.
-
-### 7) Spawn subagents (wave-based)
-
-Spawn only active-wave tasks, never all tasks at once.
-
-Use helper script:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/spawn-subagent.sh" \
-  --id feat-custom-templates \
-  --repo owner/repo \
-  --description "Custom email templates for agency customers" \
-  --worktree ../feat-custom-templates \
-  --branch feat/custom-templates \
-  --tmux-session codex-templates \
-  --agent templates \
-  --model openai/gpt-5.3-codex \
-  --fallback-model google/gemini-2.5-pro \
-  --ai-reviewers "copilot,codex,gemini" \
-  --thinking high \
-  --initial-prompt-file .pi/orchestrate/prompts/feat-custom-templates.md \
-  --br-issue-id bd-a1b2c3
-```
-
-The `--br-issue-id` flag (optional) passes the `br` issue ID created in Step 4. When provided,
-`spawn-subagent.sh` will:
-
-- call `br update <br-issue-id> --status in_progress` immediately after launching the tmux session
-- record `brIssueId` in `.pi/active-tasks.json` for downstream scripts
-
-The script:
-
-- creates git worktree and branch
-- optionally installs dependencies
-- launches pi in tmux via `scripts/run-agent-with-log.sh`
-- injects initial task prompt into the session (newline-safe compaction to avoid multi-send spam in tmux)
-- stores fallback model metadata for automatic model failover when respawns are exhausted
-- records task metadata in `.pi/active-tasks.json`
-- monitor uses `tmux capture-pane` snapshots for live context instead of reading subagent logs
-
-After PR creation, subagent should request AI reviews with:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/request-ai-reviews.sh" --reviewers "<aiReviewers-csv>"
-```
-
-### 8) Periodic monitor loop (every 10 minutes)
-
-Use deterministic monitor:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/check-active-tasks.sh" \
-  --task-file .pi/active-tasks.json \
-  --capture-pane-lines 80 \
-  --require-human-review false
-```
-
-Suggested cron job:
-
-```cron
-*/10 * * * * cd /path/to/repo && "$ORCHESTRATE_SCRIPTS_DIR/check-active-tasks.sh" --task-file .pi/active-tasks.json >> .pi/orchestrate-monitor.log 2>&1
-```
-
-Monitor behavior is implemented by `scripts/check-active-tasks.sh` and documented in `references/orchestrator-operations.md`.
-
-Key outcomes:
-
-- session resilience with fallback model failover
-- PR-first escalation if no PR is opened within SLA
-- deduped/cooldown follow-up prompts
-- autonomous merge after CI + AI gates (unless `--require-human-review true`)
-- **br signals**: when `br` is installed, the monitor also surfaces `br blocked` and `br stale` issues as alerts
-- **br close on merge**: when a task's PR merges, `check-active-tasks.sh` automatically calls `br close <brIssueId>`
-
-### 9) Human review actions (optional)
-
-Record human review decisions with:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/human-review-action.sh" --task-id feat-custom-templates --approve
-"$ORCHESTRATE_SCRIPTS_DIR/human-review-action.sh" --task-id feat-custom-templates --request-changes "Please address API contract mismatch and add tests."
-```
-
-### 10) Status dashboard + done gate automation
-
-Use dashboard for quick monitoring:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/orchestrate-status.sh" --task-file .pi/active-tasks.json
-```
-
-When `br` is installed and `.beads/` exists, the dashboard also prints `br count --by status`
-and `br ready` to give an at-a-glance view of the dependency-aware task queue.
-
-Verify done gate for a specific task before marking complete:
-
-```bash
-"$ORCHESTRATE_SCRIPTS_DIR/verify-done-gate.sh" --task-id feat-custom-templates --task-file .pi/active-tasks.json
-```
-
-When the gate passes and `brIssueId` is set, `verify-done-gate.sh` automatically:
-1. calls `br close <brIssueId> --reason "PR merged. Done gate passed."`
-2. calls `br sync --flush-only` to export the updated state to `.beads/issues.jsonl`
-3. prints a reminder to `git add .beads/ && git commit`
-
-### 11) Definition of done gate (strict)
-
-A task is complete only when all are true:
-
-- PR created
-- branch mergeable/synced with `main` (no conflicts)
-- CI passing (lint, typecheck, unit tests, E2E)
-- Codex review passed
-- Gemini review passed
-- Copilot review passed
-- human review approved (only when running with `--require-human-review true`)
-- PR merged
-- tmux session closed after merge
-- UI screenshots included when UI changes are present
-
-See `references/definition-of-done.md` for details.
-
-## Active task record
-
-Use the shape from `templates/active-task.example.json` and include at least:
-
-- `id`, `brIssueId` (br issue ID, e.g. `bd-a1b2c3`; `null` when br is not used), `tmuxSession`, `agent`, `model`, `fallbackModel`, `aiReviewers`, `thinking`
-- `description`, `repo`, `worktree`, `branch`
-- `startedAt`, `status`, `respawnAttempts`, `maxRespawnAttempts`
-- `notifyOnComplete`, `respawnCommand`, `logPath`
-- `initialPromptFile`, `wave`, `priority`
-- `humanReviewState`, `humanReviewFeedback`, `pendingHumanFollowup`
-- `lastPaneSnippet`, `lastPaneCapturedAt` (from `tmux capture-pane`)
-- `followupCount`, `lastFollowupAt`, `lastFollowupMessage`, `lastFollowupHash`, `prUpdatedAt`
-- `requireHumanReview` (set by monitor policy)
-- `prOpenNudgeCount`, `lastPrOpenNudgeAt`, `fallbackActivated`, `fallbackActivatedAt`
-
-Recommended status values:
-
-- `queued`, `running`, `waiting-ci`, `waiting-review`, `waiting-artifacts`, `waiting-human-review`, `needs-human`, `complete`, `cancelled`
+- **Maximum subagent concurrency** (required before spawning)
+- **Allowed subagent model pool** (required before spawning, must be from logged-in providers)
+
+## Non-negotiables (short list)
+
+1. Break work into **small/medium** tasks only (no “big”).
+2. Every task includes success criteria + validation steps.
+3. Get one user sign-off on rescoped plan + execution policy, then proceed autonomously.
+4. Ask for `maxConcurrency` and allowed models **before** any spawn.
+5. Use **waves** capped by `maxConcurrency` (never one subagent per task by default).
+6. Use only user-approved models; never bypass helper scripts.
+7. Keep `.pi/orchestrate/tasks.json` as the machine source of truth.
+8. Keep tmux sessions alive until PRs are merged.
+
+## Workflow (high level)
+
+0. **Preflight (mandatory):** read `references/preflight.md` and run the checks.
+1. **Intake:** read PRD + key context, summarize scope/risks/unknowns.
+2. **Interview:** read `references/interview.md` and collect answers (use `/answer` in TUI).
+3. **Rescope:** write `.pi/orchestrate/rescoped-plan.md`.
+4. **Decompose:** create tasks + br issues (see `references/tasks-and-br.md`).
+5. **Plan execution:** create `.pi/orchestrate/execution-plan.md` and schedule waves.
+6. **Approval gate:** get one go/no-go, then proceed autonomously.
+7. **Prepare prompts:** render task prompts (see `references/execution-and-spawn.md`).
+8. **Spawn wave(s):** use helper scripts only; pass br issue IDs.
+9. **Monitor:** use periodic monitor loop (see `references/monitoring.md`).
+10. **Done gate:** enforce definition-of-done (see `references/definition-of-done.md`).
 
 ## Output behavior
 
 - Keep updates concise and status-driven.
 - Escalate only actionable blockers.
-- Reconcile task list against rescoped success criteria.
 - Report concurrency usage and follow-up actions on each checkpoint.
