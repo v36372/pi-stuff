@@ -10,7 +10,8 @@ Usage:
     --max-concurrency <n> \
     [--wave-label <wave-n>] \
     [--output <path>] \
-    [--apply]
+    [--apply] \
+    [--use-br]
 
 Selects next runnable tasks by dependency, priority, and model availability.
 
@@ -20,6 +21,10 @@ Rules:
 - Task dependencies must be complete
 - Higher priority first (critical > high > medium > low)
 - Tie-break by difficulty (high > medium > low), then id
+
+If --use-br is set, task candidates come from `br ready --json` instead of --tasks-file.
+br must be installed and a .beads/ workspace must exist in the repo root.
+The --tasks-file is still used (and updated when --apply is set) as the scheduling record.
 
 If --apply is set, selected tasks are marked status=running with wave=<wave-label>.
 EOF
@@ -31,6 +36,7 @@ MAX_CONCURRENCY=""
 WAVE_LABEL=""
 OUTPUT=""
 APPLY="false"
+USE_BR="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --apply)
       APPLY="true"
+      shift 1
+      ;;
+    --use-br)
+      USE_BR="true"
       shift 1
       ;;
     -h|--help)
@@ -95,6 +105,35 @@ else
 fi
 
 TASKS_JSON="$(jq 'if type == "array" then . else [.] end' "$TASKS_FILE")"
+
+# When --use-br is set, replace the candidate pool with `br ready --json`.
+# br respects the full dependency graph automatically, so we only need to
+# filter by available concurrency slots — no manual dep-walking required.
+if [[ "$USE_BR" == "true" ]]; then
+  if ! command -v br >/dev/null 2>&1; then
+    echo "--use-br requested but br is not installed" >&2
+    exit 1
+  fi
+  BR_READY_JSON="$(br ready --json 2>/dev/null || echo "[]")"
+  # Map br issues back to orchestrate task records using the orch-id label.
+  # For each ready br issue, find the matching task in TASKS_JSON by brIssueId
+  # or by the orch-id label, then use those task records as the candidate pool.
+  TASKS_JSON="$(jq -n \
+    --argjson br_ready "$BR_READY_JSON" \
+    --argjson all_tasks "$TASKS_JSON" '
+    # Build a set of br IDs that are ready
+    ($br_ready | map(.id) | unique) as $ready_ids |
+    # Keep only tasks whose brIssueId is in the ready set, OR tasks with no
+    # brIssueId that are still queued (backward-compat with non-br tasks).
+    $all_tasks | map(
+      if .brIssueId != null and .brIssueId != "" then
+        select(.brIssueId as $bid | ($ready_ids | index($bid)) != null)
+      else
+        select((.status // "queued") == "queued")
+      end
+    )
+  ')"
+fi
 
 running_count="$(jq '[.[] | select((.status // "") == "running")] | length' <<<"$ACTIVE_TASK_JSON")"
 case "$running_count" in

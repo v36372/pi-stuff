@@ -369,6 +369,23 @@ NOW_MS="$(($(date +%s) * 1000))"
 
 alerts=()
 
+# Supplemental br signals (non-fatal; enrich alerts when br is available)
+if command -v br >/dev/null 2>&1 && [[ -d ".beads" ]]; then
+  br_blocked_json="$(br blocked --json 2>/dev/null || echo "[]")"
+  br_blocked_count="$(jq 'length' <<<"$br_blocked_json" 2>/dev/null || echo "0")"
+  if [[ "$br_blocked_count" -gt 0 ]]; then
+    blocked_titles="$(jq -r '.[].title' <<<"$br_blocked_json" | head -5 | paste -sd ', ')"
+    alerts+=("br: ${br_blocked_count} blocked issue(s): ${blocked_titles}")
+  fi
+
+  br_stale_json="$(br stale --days 1 --json 2>/dev/null || echo "[]")"
+  br_stale_count="$(jq 'length' <<<"$br_stale_json" 2>/dev/null || echo "0")"
+  if [[ "$br_stale_count" -gt 0 ]]; then
+    stale_titles="$(jq -r '.[].title' <<<"$br_stale_json" | head -5 | paste -sd ', ')"
+    alerts+=("br: ${br_stale_count} stale issue(s) (>24h no update): ${stale_titles}")
+  fi
+fi
+
 pr_list_json() {
   local repo="$1"
   local branch="$2"
@@ -689,6 +706,20 @@ for ((i = 0; i < TASK_COUNT; i++)); do
     completed_at_json="$NOW_MS"
     new_status="complete"
     blocking_reason=""
+
+    # Close the br issue when the PR is merged
+    br_issue_id="$(jq -r '.brIssueId // ""' <<<"$task")"
+    if [[ -n "$br_issue_id" && "$DRY_RUN" != "true" ]]; then
+      if command -v br >/dev/null 2>&1; then
+        pr_number_val="$(jq -r '.number // ""' <<<"$open_pr_item" 2>/dev/null || jq -r '.number // ""' <<<"$merged_pr_item" 2>/dev/null || echo "")"
+        close_reason="PR #${pr_number_val:-merged} merged. CI: pass. AI reviews: pass."
+        if br close "$br_issue_id" --reason "$close_reason" 2>/dev/null; then
+          alerts+=("$id: br issue ${br_issue_id} closed")
+        else
+          alerts+=("$id: Warning: could not close br issue ${br_issue_id}")
+        fi
+      fi
+    fi
 
     if [[ "$notify_on_complete" == "true" ]]; then
       alerts+=("$id: PR already merged; task marked complete")
@@ -1017,6 +1048,13 @@ for ((i = 0; i < TASK_COUNT; i++)); do
             new_status="complete"
             blocking_reason=""
 
+            # Close the br issue on auto-merge
+            br_issue_id_merge="$(jq -r '.brIssueId // ""' <<<"$task")"
+            if [[ -n "$br_issue_id_merge" ]] && command -v br >/dev/null 2>&1; then
+              close_reason_merge="PR #$(jq -r '.number' <<<"$open_pr_item") auto-merged. CI: pass. AI reviews: pass."
+              br close "$br_issue_id_merge" --reason "$close_reason_merge" 2>/dev/null || true
+            fi
+
             if [[ "$close_session_on_merge" == "true" ]]; then
               if tmux has-session -t "$tmux_session" 2>/dev/null; then
                 tmux kill-session -t "$tmux_session" || true
@@ -1044,6 +1082,13 @@ for ((i = 0; i < TASK_COUNT; i++)); do
             completed_at_json="$NOW_MS"
             new_status="complete"
             blocking_reason=""
+
+            # Close the br issue on human-approved merge
+            br_issue_id_hr="$(jq -r '.brIssueId // ""' <<<"$task")"
+            if [[ -n "$br_issue_id_hr" ]] && command -v br >/dev/null 2>&1; then
+              close_reason_hr="PR #$(jq -r '.number' <<<"$open_pr_item") merged after human approval. CI: pass. AI reviews: pass."
+              br close "$br_issue_id_hr" --reason "$close_reason_hr" 2>/dev/null || true
+            fi
 
             if [[ "$close_session_on_merge" == "true" ]]; then
               if tmux has-session -t "$tmux_session" 2>/dev/null; then

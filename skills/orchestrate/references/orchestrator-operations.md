@@ -83,3 +83,82 @@ Human-reviewed mode:
 - Confirm each running task has exactly one open PR.
 - Confirm AI review request happened immediately after PR creation.
 - Verify done gate before final completion update.
+
+## 7) br task store workflow
+
+The orchestrate skill uses `br` (beads_rust) as the dependency-aware task store alongside
+`.pi/active-tasks.json` (which holds runtime/tmux metadata). See `references/br-field-mapping.md`
+for the full field mapping.
+
+### Initialization (once per initiative)
+
+```bash
+# br is checked during Step 0 preflight; if .beads/ is absent it is created automatically.
+# To initialize manually:
+br init
+br config --set id.prefix=orch   # optional: prefix all issue IDs with "orch-"
+```
+
+### Task decomposition (Step 4)
+
+For each task, create a `br` issue and store the returned ID in the active-task record:
+
+```bash
+BR_JSON=$(br create "Task title" --type task --priority 1 --description "..." --json)
+BR_ID=$(echo "$BR_JSON" | jq -r '.id')
+
+br label add "$BR_ID" "size:medium" "difficulty:high" \
+  "model:openai/gpt-5.3-codex" "reviewers:copilot,codex,gemini" "wave:wave-1"
+
+# Add dependency: this task depends on another br issue
+br dep add "$BR_ID" "$PARENT_BR_ID"
+```
+
+### Scheduling (Step 5)
+
+Use `br ready --json` as the source of truth for wave picks — it automatically
+excludes any task whose dependencies are not yet closed:
+
+```bash
+br ready --json | jq --argjson n "$AVAILABLE_SLOTS" '.[:$n]'
+```
+
+### Claiming (Step 7 — inside spawn-subagent.sh)
+
+Immediately after launching the tmux session, `spawn-subagent.sh` marks the issue in-progress:
+
+```bash
+br update "$BR_ISSUE_ID" --status in_progress
+```
+
+### Monitoring (Step 8)
+
+Supplement tmux pane snapshots with `br` signals:
+
+```bash
+br blocked --json          # Tasks whose deps are not closed — escalation candidates
+br stale --days 1 --json   # Tasks with no update in >24h
+br count --by status       # Quick summary
+```
+
+### Completion (Steps 10-11 — inside verify-done-gate.sh)
+
+When all done-gate checks pass and the PR is merged:
+
+```bash
+br close "$BR_ISSUE_ID" --reason "PR #${PR_NUMBER} merged. CI: pass. AI reviews: pass."
+br sync --flush-only
+git add .beads/
+git commit -m "chore: close ${BR_ISSUE_ID} [orchestrate]"
+```
+
+### Session end checklist (mandatory)
+
+Before ending any orchestrate session:
+
+```bash
+br sync --flush-only       # Export SQLite → JSONL
+git add .beads/            # Stage beads changes
+git commit -m "chore: sync task state [orchestrate]"
+git push
+```

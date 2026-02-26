@@ -27,11 +27,17 @@ Usage:
     [--tmux-width <n>] \
     [--tmux-height <n>] \
     [--initial-prompt-file <path>] \
-    [--initial-prompt-delay <seconds>]
+    [--initial-prompt-delay <seconds>] \
+    [--br-issue-id <br-issue-id>]
 
 Environment:
   RUN_AGENT_SCRIPT         Path to run-agent-with-log.sh (default: sibling script in this skill)
   ORCHESTRATE_AI_REVIEWERS Default reviewers CSV when --ai-reviewers is omitted (default: copilot,codex,gemini)
+
+Optional br integration:
+  Pass --br-issue-id <id> to have spawn-subagent.sh mark the br issue in_progress immediately
+  after the tmux session is launched and record brIssueId in the active-task record.
+  br must be installed and a .beads/ workspace must exist in the repo root.
 EOF
 }
 
@@ -151,6 +157,7 @@ TMUX_WIDTH="80"
 TMUX_HEIGHT="24"
 INITIAL_PROMPT_FILE=""
 INITIAL_PROMPT_DELAY="3"
+BR_ISSUE_ID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -244,6 +251,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --initial-prompt-delay)
     INITIAL_PROMPT_DELAY="${2:-}"
+    shift 2
+    ;;
+  --br-issue-id)
+    BR_ISSUE_ID="${2:-}"
     shift 2
     ;;
   -h | --help)
@@ -426,6 +437,19 @@ if [[ ! -f "$TASK_FILE_ABS" ]]; then
   echo "[]" >"$TASK_FILE_ABS"
 fi
 
+# Mark br issue in_progress now that the session is live
+if [[ -n "$BR_ISSUE_ID" ]]; then
+  if command -v br >/dev/null 2>&1; then
+    if br update "$BR_ISSUE_ID" --status in_progress 2>/dev/null; then
+      echo "  br issue ${BR_ISSUE_ID} marked in_progress"
+    else
+      echo "  Warning: could not mark br issue ${BR_ISSUE_ID} in_progress (br update failed)" >&2
+    fi
+  else
+    echo "  Warning: br not found; skipping br issue status update" >&2
+  fi
+fi
+
 if ! jq -e . "$TASK_FILE_ABS" >/dev/null 2>&1; then
   echo "Invalid JSON in $TASK_FILE_ABS" >&2
   exit 1
@@ -439,6 +463,7 @@ NOW_MS="$(($(date +%s) * 1000))"
 
 TASK_JSON="$(jq -n \
   --arg id "$ID" \
+  --arg brIssueId "$BR_ISSUE_ID" \
   --arg tmuxSession "$TMUX_SESSION" \
   --arg agent "$AGENT" \
   --arg model "$MODEL" \
@@ -465,6 +490,7 @@ TASK_JSON="$(jq -n \
   --argjson notifyOnComplete "$NOTIFY_ON_COMPLETE" \
   '{
     id: $id,
+    brIssueId: (if $brIssueId == "" then null else $brIssueId end),
     tmuxSession: $tmuxSession,
     agent: $agent,
     model: $model,

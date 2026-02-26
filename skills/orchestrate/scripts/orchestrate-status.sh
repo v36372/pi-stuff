@@ -77,6 +77,18 @@ if [[ "$AS_JSON" == "true" ]]; then
   exit 0
 fi
 
+# br summary (shown when br is available and a .beads/ workspace exists)
+if command -v br >/dev/null 2>&1 && [[ -d "$ROOT_DIR/.beads" ]]; then
+  echo "=== br task summary ==="
+  br count --by status 2>/dev/null || true
+  echo ""
+  echo "Ready to schedule:"
+  br ready --no-color 2>/dev/null | head -10 || true
+  echo ""
+fi
+
+echo "=== Active task dashboard ==="
+
 printf '%s\n' "TASK_ID|WAVE|MODEL|STATUS|PR|CI|AI|HUMAN|BLOCKER"
 
 jq -r '

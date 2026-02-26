@@ -1,6 +1,7 @@
 [
   {
     "id": "feat-custom-templates",
+    "brIssueId": "bd-a1b2c3",
     "tmuxSession": "codex-templates",
     "agent": "templates",
     "model": "openai/gpt-5.3-codex",

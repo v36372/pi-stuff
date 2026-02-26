@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Orchestrates end-to-end execution of detailed engineering plans by rescoping to small/medium tasks, running low-concurrency subagent waves with user-selected models, and managing autonomous PR-to-merge loops with monitor-driven follow-up control.
-compatibility: Requires git, tmux, gh, jq, and scripts/run-agent-with-log.sh.
+compatibility: Requires git, tmux, gh, jq, br, and scripts/run-agent-with-log.sh.
 ---
 
 # Orchestrate
@@ -62,6 +62,27 @@ fi
 
 After preflight, call helpers via `$ORCHESTRATE_SCRIPTS_DIR/<script>.sh` (absolute path), not `./scripts/...`.
 
+**br preflight** (run after the script check above):
+
+```bash
+if ! command -v br >/dev/null 2>&1; then
+  echo "br not found. Install with:"
+  echo '  curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/beads_rust/main/install.sh" | bash'
+  echo "Then re-run. br is required for task tracking."
+  exit 1
+fi
+
+# Initialize br workspace if not present
+if [[ ! -d .beads ]]; then
+  br init
+  # Use a short prefix for issue IDs (change to match initiative slug)
+  br config --set id.prefix=orch
+  echo "br workspace initialized in .beads/"
+fi
+```
+
+`br` is required for task tracking. See `references/br-field-mapping.md` for the full field mapping between orchestrate task fields and `br` equivalents.
+
 ### 1) Intake + context
 
 1. Read the PRD/plan markdown file.
@@ -110,10 +131,12 @@ Produce both:
 
 - `.pi/orchestrate/tasks.md` (human-readable)
 - `.pi/orchestrate/tasks.json` (machine source of truth used by scripts)
+- **`br` issues** (one per task — the dependency-aware, git-syncable source of truth)
 
 Each task must contain:
 
 - `id`
+- `brIssueId` — the `br` issue ID returned after `br create` (e.g. `bd-a1b2c3`)
 - `size`: `small | medium` (never `big`)
 - `difficulty`: `low | medium | high`
 - `dependencies`
@@ -124,6 +147,35 @@ Each task must contain:
 - `aiReviewers` (CSV, default `copilot,codex,gemini`)
 - `priority`
 - `status`: `queued | running | complete | cancelled`
+
+**Create each task in `br` during decomposition:**
+
+```bash
+# Create the br issue and capture its ID
+BR_JSON=$(br create "Task title" \
+  --type task \
+  --priority 1 \
+  --description "$(printf '%s\n\nSuccess criteria:\n%s\n\nValidation:\n%s' \
+      "$TASK_DESCRIPTION" "$SUCCESS_CRITERIA" "$VALIDATION_CMDS")" \
+  --json)
+BR_ISSUE_ID=$(echo "$BR_JSON" | jq -r '.id')
+
+# Apply orchestrate labels
+br label add "$BR_ISSUE_ID" \
+  "size:medium" \
+  "difficulty:high" \
+  "model:openai/gpt-5.3-codex" \
+  "fallback-model:google/gemini-2.5-pro" \
+  "reviewers:copilot,codex,gemini" \
+  "orch-id:$TASK_ID"
+
+# Wire dependencies (child depends on parent)
+br dep add "$BR_ISSUE_ID" "$PARENT_BR_ISSUE_ID"
+```
+
+Store `$BR_ISSUE_ID` as `brIssueId` in both `tasks.json` and the active-task record.
+
+See `references/br-field-mapping.md` for the priority/status/label mapping table.
 
 ### 5) Capacity planning (low concurrency + model allocation)
 
@@ -143,7 +195,8 @@ Scheduling rules:
 - Assign only models approved by the user.
 - Ensure approved models are a subset of `"$ORCHESTRATE_SCRIPTS_DIR/list-logged-in-models.sh" --ids` output.
 
-Use scheduler for deterministic wave picks:
+Use scheduler for deterministic wave picks. Pass `--use-br` to let `br ready --json` drive
+which tasks are eligible (dependency graph is resolved automatically by `br`):
 
 ```bash
 "$ORCHESTRATE_SCRIPTS_DIR/schedule-wave.sh" \
@@ -151,8 +204,12 @@ Use scheduler for deterministic wave picks:
   --active-task-file .pi/active-tasks.json \
   --max-concurrency 2 \
   --wave-label wave-1 \
-  --output .pi/orchestrate/next-wave.json
+  --output .pi/orchestrate/next-wave.json \
+  --use-br
 ```
+
+Without `--use-br`, the scheduler falls back to the dependency logic built into `tasks.json`
+(backward-compatible with initiatives that predate `br` integration).
 
 ### 5.5) Single approval gate then autonomous mode
 
@@ -212,8 +269,15 @@ Use helper script:
   --fallback-model google/gemini-2.5-pro \
   --ai-reviewers "copilot,codex,gemini" \
   --thinking high \
-  --initial-prompt-file .pi/orchestrate/prompts/feat-custom-templates.md
+  --initial-prompt-file .pi/orchestrate/prompts/feat-custom-templates.md \
+  --br-issue-id bd-a1b2c3
 ```
+
+The `--br-issue-id` flag (optional) passes the `br` issue ID created in Step 4. When provided,
+`spawn-subagent.sh` will:
+
+- call `br update <br-issue-id> --status in_progress` immediately after launching the tmux session
+- record `brIssueId` in `.pi/active-tasks.json` for downstream scripts
 
 The script:
 
@@ -256,6 +320,8 @@ Key outcomes:
 - PR-first escalation if no PR is opened within SLA
 - deduped/cooldown follow-up prompts
 - autonomous merge after CI + AI gates (unless `--require-human-review true`)
+- **br signals**: when `br` is installed, the monitor also surfaces `br blocked` and `br stale` issues as alerts
+- **br close on merge**: when a task's PR merges, `check-active-tasks.sh` automatically calls `br close <brIssueId>`
 
 ### 9) Human review actions (optional)
 
@@ -274,11 +340,19 @@ Use dashboard for quick monitoring:
 "$ORCHESTRATE_SCRIPTS_DIR/orchestrate-status.sh" --task-file .pi/active-tasks.json
 ```
 
+When `br` is installed and `.beads/` exists, the dashboard also prints `br count --by status`
+and `br ready` to give an at-a-glance view of the dependency-aware task queue.
+
 Verify done gate for a specific task before marking complete:
 
 ```bash
 "$ORCHESTRATE_SCRIPTS_DIR/verify-done-gate.sh" --task-id feat-custom-templates --task-file .pi/active-tasks.json
 ```
+
+When the gate passes and `brIssueId` is set, `verify-done-gate.sh` automatically:
+1. calls `br close <brIssueId> --reason "PR merged. Done gate passed."`
+2. calls `br sync --flush-only` to export the updated state to `.beads/issues.jsonl`
+3. prints a reminder to `git add .beads/ && git commit`
 
 ### 11) Definition of done gate (strict)
 
@@ -301,7 +375,7 @@ See `references/definition-of-done.md` for details.
 
 Use the shape from `templates/active-task.example.json` and include at least:
 
-- `id`, `tmuxSession`, `agent`, `model`, `fallbackModel`, `aiReviewers`, `thinking`
+- `id`, `brIssueId` (br issue ID, e.g. `bd-a1b2c3`; `null` when br is not used), `tmuxSession`, `agent`, `model`, `fallbackModel`, `aiReviewers`, `thinking`
 - `description`, `repo`, `worktree`, `branch`
 - `startedAt`, `status`, `respawnAttempts`, `maxRespawnAttempts`
 - `notifyOnComplete`, `respawnCommand`, `logPath`

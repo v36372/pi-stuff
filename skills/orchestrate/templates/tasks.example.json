@@ -1,6 +1,7 @@
 [
   {
     "id": "feat-custom-templates",
+    "brIssueId": "bd-a1b2c3",
     "size": "medium",
     "difficulty": "medium",
     "dependencies": [],

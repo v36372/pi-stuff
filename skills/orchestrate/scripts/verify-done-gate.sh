@@ -211,3 +211,23 @@ if [[ ${#failures[@]} -gt 0 ]]; then
 fi
 
 echo "PASS: task $TASK_ID satisfies done gates"
+
+# Close the linked br issue if one exists and the gate just passed.
+# This is a best-effort call: failures are warnings, not errors.
+br_issue_id="$(jq -r '.brIssueId // ""' <<<"$task")"
+if [[ -n "$br_issue_id" ]]; then
+  if command -v br >/dev/null 2>&1; then
+    pr_close_reason="PR #${pr_number} merged. Done gate passed for task ${TASK_ID}."
+    if br close "$br_issue_id" --reason "$pr_close_reason" 2>/dev/null; then
+      echo "br issue ${br_issue_id} closed"
+      # Export updated state to JSONL for git tracking
+      if br sync --flush-only 2>/dev/null; then
+        echo "br sync --flush-only completed; run: git add .beads/ && git commit -m \"chore: close ${br_issue_id} [orchestrate]\""
+      fi
+    else
+      echo "Warning: could not close br issue ${br_issue_id} (already closed or br error)" >&2
+    fi
+  else
+    echo "Warning: brIssueId=${br_issue_id} is set but br is not installed; skipping br close" >&2
+  fi
+fi
