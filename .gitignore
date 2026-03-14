@@ -1,6 +1,6 @@
 *
 !extensions
-!extensions/lib
+!extensions/**
 !skills
 !prompts
 !themes
