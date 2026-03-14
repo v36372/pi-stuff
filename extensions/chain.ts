@@ -42,6 +42,18 @@ interface ChainRunManifest {
 	stages: ChainArtifactRecord[];
 }
 
+interface ActiveChainRun {
+	commandCtx: ExtensionCommandContext;
+	stages: ChainStage[];
+	manifest: ChainRunManifest;
+	currentStageIndex: number;
+	currentStageStartLeafId: string | null;
+	currentStagePrompt: string;
+	previousArtifactPath?: string;
+	finalArtifactPath?: string;
+	processingStageResult: boolean;
+}
+
 function stripWrappingQuotes(value: string): string {
 	if (value.length < 2) return value;
 	const first = value[0];
@@ -388,6 +400,32 @@ function resolvePromptTemplateSource(
 	};
 }
 
+function resolvePromptTemplateSourceFallback(
+	input: string,
+	cwd: string,
+): { sourceLabel: string; content: string } | undefined {
+	const trimmed = stripWrappingQuotes(input.trim());
+	if (!trimmed.startsWith("/") || /\s/.test(trimmed)) {
+		return;
+	}
+
+	const templateName = trimmed.slice(1);
+	const candidates = [
+		path.join(cwd, "prompts", `${templateName}.md`),
+		path.join(cwd, ".pi", "prompts", `${templateName}.md`),
+		path.join(os.homedir(), ".pi", "agent", "prompts", `${templateName}.md`),
+	];
+
+	for (const candidate of candidates) {
+		if (!fs.existsSync(candidate)) continue;
+		if (!fs.statSync(candidate).isFile()) continue;
+		return {
+			sourceLabel: `template:${templateName}`,
+			content: stripPromptTemplateFrontmatter(fs.readFileSync(candidate, "utf8")),
+		};
+	}
+}
+
 async function loadPromptSource(
 	args: string,
 	ctx: ExtensionCommandContext,
@@ -402,7 +440,8 @@ async function loadPromptSource(
 			};
 		}
 
-		const promptTemplateSource = resolvePromptTemplateSource(trimmedArgs, pi);
+		const promptTemplateSource =
+			resolvePromptTemplateSource(trimmedArgs, pi) ?? resolvePromptTemplateSourceFallback(trimmedArgs, ctx.cwd);
 		if (promptTemplateSource) {
 			return promptTemplateSource;
 		}
@@ -474,10 +513,150 @@ async function loadPromptSource(
 }
 
 export default function (pi: ExtensionAPI) {
+	let activeRun: ActiveChainRun | null = null;
+
+	function clearRun(run: ActiveChainRun): void {
+		run.commandCtx.ui.setStatus(STATUS_KEY, undefined);
+		activeRun = null;
+	}
+
+	function finishRun(run: ActiveChainRun): void {
+		if (!run.finalArtifactPath) {
+			run.manifest.status = run.manifest.status === "completed" ? "cancelled" : run.manifest.status;
+			writeManifestFile(run.manifest);
+			if (run.commandCtx.hasUI) run.commandCtx.ui.notify("chain finished without writing an artifact", "warning");
+			clearRun(run);
+			return;
+		}
+
+		writeManifestFile(run.manifest);
+		if (run.commandCtx.hasUI) {
+			run.commandCtx.ui.notify(`chain finished. Final artifact: ${run.finalArtifactPath}`, "info");
+		}
+		clearRun(run);
+	}
+
+	function dispatchStage(run: ActiveChainRun): void {
+		const stage = run.stages[run.currentStageIndex];
+		run.commandCtx.ui.setStatus(STATUS_KEY, `Stage ${stage.index}/${run.stages.length}: ${stage.title}`);
+		if (run.commandCtx.hasUI) {
+			run.commandCtx.ui.notify(`chain stage ${stage.index}/${run.stages.length}: ${stage.title}`, "info");
+		}
+
+		run.currentStageStartLeafId = run.commandCtx.sessionManager.getLeafId();
+		run.currentStagePrompt = buildStagePrompt(
+			stage,
+			run.stages.length,
+			run.manifest.artifactDir,
+			run.previousArtifactPath,
+			run.manifest.readToolAvailable,
+		);
+		pi.sendUserMessage(run.currentStagePrompt);
+	}
+
+	pi.on("agent_end", async (_event, ctx) => {
+		if (!activeRun || activeRun.processingStageResult) {
+			return;
+		}
+
+		const run = activeRun;
+		const stage = run.stages[run.currentStageIndex];
+		if (!stage) {
+			return;
+		}
+
+		run.processingStageResult = true;
+		try {
+			const branchAfterStage = run.commandCtx.sessionManager.getBranch();
+			const stageEntries = getBranchEntriesAfter(branchAfterStage, run.currentStageStartLeafId);
+			const lastAssistant = getLastAssistantMessage(stageEntries);
+			if (!lastAssistant) {
+				return;
+			}
+			const stageFailed = lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted";
+
+			const navigateResult = await run.commandCtx.navigateTree(run.manifest.anchorId, {
+				summarize: true,
+				customInstructions: buildBranchSummaryFocus(stage, run.stages.length, run.previousArtifactPath),
+			});
+
+			if (navigateResult.cancelled) {
+				run.manifest.status = "cancelled";
+				finishRun(run);
+				return;
+			}
+
+			const summaryEntry = getCurrentBranchSummary(run.commandCtx);
+			const failureDetails = stageFailed ? describeAssistantOutcome(lastAssistant) : undefined;
+			const artifactPath = writeArtifactFile({
+				artifactDir: run.manifest.artifactDir,
+				runId: run.manifest.runId,
+				promptSource: run.manifest.promptSource,
+				stage,
+				totalStages: run.stages.length,
+				anchorId: run.manifest.anchorId,
+				effectivePrompt: run.currentStagePrompt,
+				previousArtifactPath: run.previousArtifactPath,
+				summaryEntry,
+				stageStatus: stageFailed ? "failed" : "completed",
+				failureDetails,
+			});
+
+			run.manifest.stages.push({
+				index: stage.index,
+				title: stage.title,
+				artifactPath,
+				summaryEntryId: summaryEntry?.id,
+				status: stageFailed ? "failed" : "completed",
+			});
+			run.previousArtifactPath = artifactPath;
+			run.finalArtifactPath = copyFinalArtifact(run.manifest.artifactDir, artifactPath);
+			run.manifest.finalArtifactPath = run.finalArtifactPath;
+			run.manifest.status = stageFailed ? "failed" : run.manifest.status;
+			writeManifestFile(run.manifest);
+
+			if (stageFailed) {
+				if (ctx.hasUI) {
+					ctx.ui.notify(
+						`Stage ${stage.index} failed after collapsing back to the anchor. Final artifact: ${run.finalArtifactPath}`,
+						"warning",
+					);
+				}
+				finishRun(run);
+				return;
+			}
+
+			if (run.currentStageIndex + 1 >= run.stages.length) {
+				finishRun(run);
+				return;
+			}
+
+			run.currentStageIndex += 1;
+			dispatchStage(run);
+		} catch (error) {
+			run.manifest.status = "failed";
+			writeManifestFile(run.manifest);
+			if (ctx.hasUI) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`chain failed: ${message}`, "error");
+			}
+			finishRun(run);
+		} finally {
+			if (activeRun === run) {
+				run.processingStageResult = false;
+			}
+		}
+	});
+
 	pi.registerCommand(COMMAND_NAME, {
 		description:
 			"Run a chained prompt workflow via /tree from inline numbered steps, a prompt file, or a prompt template",
 		handler: async (args, ctx) => {
+			if (activeRun) {
+				if (ctx.hasUI) ctx.ui.notify(`/${COMMAND_NAME} is already running`, "warning");
+				return;
+			}
+
 			if (!ctx.isIdle()) {
 				if (ctx.hasUI) ctx.ui.notify(`/${COMMAND_NAME} requires the agent to be idle`, "warning");
 				return;
@@ -542,99 +721,28 @@ export default function (pi: ExtensionAPI) {
 				status: "completed",
 				stages: [],
 			};
+			writeManifestFile(manifest);
 
-			let previousArtifactPath: string | undefined;
-			let finalArtifactPath: string | undefined;
+			activeRun = {
+				commandCtx: ctx,
+				stages,
+				manifest,
+				currentStageIndex: 0,
+				currentStageStartLeafId: anchorId,
+				currentStagePrompt: "",
+				processingStageResult: false,
+			};
 
 			ctx.ui.setStatus(STATUS_KEY, `Running 1/${stages.length}`);
-
+			const run = activeRun;
 			try {
-				for (const stage of stages) {
-					ctx.ui.setStatus(STATUS_KEY, `Stage ${stage.index}/${stages.length}: ${stage.title}`);
-					if (ctx.hasUI) {
-						ctx.ui.notify(`chain stage ${stage.index}/${stages.length}: ${stage.title}`, "info");
-					}
-
-					const stageStartLeafId = ctx.sessionManager.getLeafId();
-					const stagePrompt = buildStagePrompt(
-						stage,
-						stages.length,
-						artifactDir,
-						previousArtifactPath,
-						readToolAvailable,
-					);
-
-					pi.sendUserMessage(stagePrompt);
-					await ctx.waitForIdle();
-
-					const branchAfterStage = ctx.sessionManager.getBranch();
-					const stageEntries = getBranchEntriesAfter(branchAfterStage, stageStartLeafId);
-					const lastAssistant = getLastAssistantMessage(stageEntries);
-					const stageFailed = lastAssistant?.stopReason === "error" || lastAssistant?.stopReason === "aborted";
-
-					const navigateResult = await ctx.navigateTree(anchorId, {
-						summarize: true,
-						customInstructions: buildBranchSummaryFocus(stage, stages.length, previousArtifactPath),
-					});
-
-					if (navigateResult.cancelled) {
-						manifest.status = "cancelled";
-						break;
-					}
-
-					const summaryEntry = getCurrentBranchSummary(ctx);
-					const failureDetails = stageFailed ? describeAssistantOutcome(lastAssistant) : undefined;
-					const artifactPath = writeArtifactFile({
-						artifactDir,
-						runId,
-						promptSource: promptSource.sourceLabel,
-						stage,
-						totalStages: stages.length,
-						anchorId,
-						effectivePrompt: stagePrompt,
-						previousArtifactPath,
-						summaryEntry,
-						stageStatus: stageFailed ? "failed" : "completed",
-						failureDetails,
-					});
-
-					manifest.stages.push({
-						index: stage.index,
-						title: stage.title,
-						artifactPath,
-						summaryEntryId: summaryEntry?.id,
-						status: stageFailed ? "failed" : "completed",
-					});
-					previousArtifactPath = artifactPath;
-					finalArtifactPath = copyFinalArtifact(artifactDir, artifactPath);
-					manifest.finalArtifactPath = finalArtifactPath;
-					manifest.status = stageFailed ? "failed" : manifest.status;
-					writeManifestFile(manifest);
-
-					if (stageFailed) {
-						if (ctx.hasUI) {
-							ctx.ui.notify(
-								`Stage ${stage.index} failed after collapsing back to the anchor. Final artifact: ${finalArtifactPath}`,
-								"warning",
-							);
-						}
-						break;
-					}
-				}
-			} finally {
-				ctx.ui.setStatus(STATUS_KEY, undefined);
-			}
-
-			if (!finalArtifactPath) {
-				manifest.status = manifest.status === "completed" ? "cancelled" : manifest.status;
-				writeManifestFile(manifest);
-				if (ctx.hasUI) ctx.ui.notify("chain finished without writing an artifact", "warning");
-				return;
-			}
-
-			writeManifestFile(manifest);
-			if (ctx.hasUI) {
-				ctx.ui.notify(`chain finished. Final artifact: ${finalArtifactPath}`, "info");
+				dispatchStage(run);
+			} catch (error) {
+				run.manifest.status = "failed";
+				writeManifestFile(run.manifest);
+				const message = error instanceof Error ? error.message : String(error);
+				if (ctx.hasUI) ctx.ui.notify(`chain failed to start: ${message}`, "error");
+				finishRun(run);
 			}
 		},
 	});
