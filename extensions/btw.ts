@@ -6,6 +6,7 @@
  *   /btw -mode rush summarize the README
  *   /btw -model anthropic/claude-haiku-4-5 count lines of code
  *
+
  * Fires off an in-process subagent (same infra as the subagent tool) and
  * shows live progress in a widget above the editor. When finished, the
  * widget is replaced by a fully rendered custom message in the chat
