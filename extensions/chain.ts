@@ -616,6 +616,18 @@ export default function (pi: ExtensionAPI) {
 			writeManifestFile(run.manifest);
 
 			if (stageFailed) {
+				const failedSummary = summaryEntry?.summary?.trim();
+				if (failedSummary) {
+					const failureMessage = [
+						`## Chain Failed at Stage ${stage.index}/${run.stages.length}`,
+						"",
+						"### Summary Before Failure",
+						failedSummary,
+						"",
+						`**Artifact saved to:** ${run.finalArtifactPath}`,
+					].join("\n");
+					pi.sendUserMessage(failureMessage);
+				}
 				if (ctx.hasUI) {
 					ctx.ui.notify(
 						`Stage ${stage.index} failed after collapsing back to the anchor. Final artifact: ${run.finalArtifactPath}`,
@@ -627,6 +639,18 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (run.currentStageIndex + 1 >= run.stages.length) {
+				const finalSummary = summaryEntry?.summary?.trim();
+				if (finalSummary) {
+					const completionMessage = [
+						`## Chain Completed (${run.stages.length} stages)`,
+						"",
+						"### Final Summary",
+						finalSummary,
+						"",
+						`**Final artifact saved to:** ${run.finalArtifactPath}`,
+					].join("\n");
+					pi.sendUserMessage(completionMessage);
+				}
 				finishRun(run);
 				return;
 			}
