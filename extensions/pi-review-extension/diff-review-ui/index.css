@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@source "../../../packages/ui/components/**/*.tsx";
+@source "../../../packages/ui/hooks/**/*.ts";
+@source "../../../packages/review-editor/components/**/*.tsx";
+@source "../../../packages/review-editor/hooks/**/*.ts";
+@source "./*.tsx";
+
+@import "../../../packages/ui/theme.css";
+@import "../../../packages/review-editor/index.css";
