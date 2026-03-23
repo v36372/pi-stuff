@@ -1,18 +1,15 @@
 /**
- * Q&A extraction hook - extracts questions from assistant responses
+ * Q&A helper extension.
  *
- * Custom interactive TUI for answering questions.
- *
- * Demonstrates the "prompt generator" pattern with custom TUI:
- * 1. /answer command gets the last assistant message
- * 2. Shows a spinner while extracting questions as structured JSON
- * 3. Presents an interactive TUI to navigate and answer questions
- * 4. Submits the compiled answers when done
+ * Provides three ways to collect answers from the user:
+ * 1. `ask_questions` tool for the LLM to proactively ask structured questions
+ * 2. `/answer` command and Ctrl+. shortcut to extract questions from the last assistant message
+ * 3. Automatic fallback after assistant replies that look like requirement-gathering questions
  */
 
-import { complete, type Model, type Api, type UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { complete, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
 import { BorderedLoader } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	type Component,
 	Editor,
@@ -24,8 +21,8 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
 
-// Structured output format for question extraction
 interface ExtractedQuestion {
 	question: string;
 	context?: string;
@@ -34,6 +31,23 @@ interface ExtractedQuestion {
 interface ExtractionResult {
 	questions: ExtractedQuestion[];
 }
+
+const AskQuestionsParams = Type.Object({
+	questions: Type.Array(
+		Type.Object({
+			question: Type.String({ description: "The question to ask the user" }),
+			context: Type.Optional(
+				Type.String({
+					description: "Optional short context that helps the user answer the question",
+				}),
+			),
+		}),
+		{
+			minItems: 1,
+			description: "Questions to ask the user. Batch related questions into a single tool call.",
+		},
+	),
+});
 
 const SYSTEM_PROMPT = `You are a question extractor. Given text from a conversation, extract any questions that need answering.
 
@@ -67,12 +81,10 @@ Example output:
   ]
 }`;
 
+const ANSWERS_PREFIX = "Here are my answers:\n\n";
 const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
 const HAIKU_MODEL_ID = "claude-haiku-4-5";
 
-/**
- * Prefer Codex mini for extraction when available, otherwise fallback to haiku or the current model.
- */
 async function selectExtractionModel(
 	currentModel: Model<Api>,
 	modelRegistry: {
@@ -83,37 +95,23 @@ async function selectExtractionModel(
 	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
 	if (codexModel) {
 		const apiKey = await modelRegistry.getApiKey(codexModel);
-		if (apiKey) {
-			return codexModel;
-		}
+		if (apiKey) return codexModel;
 	}
 
 	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-	if (!haikuModel) {
-		return currentModel;
-	}
+	if (!haikuModel) return currentModel;
 
 	const apiKey = await modelRegistry.getApiKey(haikuModel);
-	if (!apiKey) {
-		return currentModel;
-	}
+	if (!apiKey) return currentModel;
 
 	return haikuModel;
 }
 
-/**
- * Parse the JSON response from the LLM
- */
 function parseExtractionResult(text: string): ExtractionResult | null {
 	try {
-		// Try to find JSON in the response (it might be wrapped in markdown code blocks)
 		let jsonStr = text;
-
-		// Remove markdown code block if present
 		const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-		if (jsonMatch) {
-			jsonStr = jsonMatch[1].trim();
-		}
+		if (jsonMatch) jsonStr = jsonMatch[1].trim();
 
 		const parsed = JSON.parse(jsonStr);
 		if (parsed && Array.isArray(parsed.questions)) {
@@ -125,23 +123,101 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 	}
 }
 
-/**
- * Interactive Q&A component for answering extracted questions
- */
+function getTextContent(content: Array<{ type: string; text?: string }> | undefined): string {
+	if (!content) return "";
+	return content
+		.filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
+		.map((part) => part.text)
+		.join("\n")
+		.trim();
+}
+
+function findLastCompleteAssistantText(ctx: ExtensionContext): string | undefined {
+	const branch = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry.type !== "message") continue;
+		const message = entry.message as {
+			role?: string;
+			stopReason?: string;
+			content?: Array<{ type: string; text?: string }>;
+		};
+		if (message.role !== "assistant" || message.stopReason !== "stop") continue;
+		const text = getTextContent(message.content);
+		if (text) return text;
+	}
+	return undefined;
+}
+
+function formatAnswers(questions: ExtractedQuestion[], answers: string[]): string {
+	const parts: string[] = [];
+	for (let i = 0; i < questions.length; i++) {
+		const question = questions[i];
+		const answer = answers[i]?.trim() || "(no answer)";
+		parts.push(`Q: ${question.question}`);
+		if (question.context) parts.push(`> ${question.context}`);
+		parts.push(`A: ${answer}`);
+		parts.push("");
+	}
+	return parts.join("\n").trim();
+}
+
+function shouldAttemptAutomaticPrompt(text: string): boolean {
+	const questionMarks = (text.match(/[?？]/g) || []).length;
+	if (questionMarks >= 2) return true;
+
+	return /\b(i have .*questions|a few questions|need a few answers|can you clarify|could you clarify|please answer|which option|which one|should we|do you want|would you like|what should|what would you prefer)\b/i.test(
+		text,
+	);
+}
+
+async function extractQuestionsFromText(ctx: ExtensionContext, text: string): Promise<ExtractionResult | null> {
+	if (!ctx.hasUI || !ctx.model) return null;
+
+	const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
+	return ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
+		const loader = new BorderedLoader(tui, theme, `Extracting questions using ${extractionModel.id}...`);
+		loader.onAbort = () => done(null);
+
+		const doExtract = async () => {
+			const apiKey = await ctx.modelRegistry.getApiKey(extractionModel);
+			const userMessage: UserMessage = {
+				role: "user",
+				content: [{ type: "text", text }],
+				timestamp: Date.now(),
+			};
+
+			const response = await complete(
+				extractionModel,
+				{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
+				{ apiKey, signal: loader.signal },
+			);
+
+			if (response.stopReason === "aborted") return null;
+
+			const responseText = getTextContent(response.content as Array<{ type: string; text?: string }>);
+			return parseExtractionResult(responseText);
+		};
+
+		doExtract()
+			.then(done)
+			.catch(() => done(null));
+
+		return loader;
+	});
+}
+
 class QnAComponent implements Component {
 	private questions: ExtractedQuestion[];
 	private answers: string[];
-	private currentIndex: number = 0;
+	private currentIndex = 0;
 	private editor: Editor;
 	private tui: TUI;
 	private onDone: (result: string | null) => void;
-	private showingConfirmation: boolean = false;
-
-	// Cache
+	private showingConfirmation = false;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
-	// Colors - using proper reset sequences
 	private dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 	private bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 	private cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
@@ -149,17 +225,12 @@ class QnAComponent implements Component {
 	private yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 	private gray = (s: string) => `\x1b[90m${s}\x1b[0m`;
 
-	constructor(
-		questions: ExtractedQuestion[],
-		tui: TUI,
-		onDone: (result: string | null) => void,
-	) {
+	constructor(questions: ExtractedQuestion[], tui: TUI, onDone: (result: string | null) => void) {
 		this.questions = questions;
 		this.answers = questions.map(() => "");
 		this.tui = tui;
 		this.onDone = onDone;
 
-		// Create a minimal theme for the editor
 		const editorTheme: EditorTheme = {
 			borderColor: this.dim,
 			selectList: {
@@ -170,18 +241,11 @@ class QnAComponent implements Component {
 		};
 
 		this.editor = new Editor(tui, editorTheme);
-		// Disable the editor's built-in submit (which clears the editor)
-		// We'll handle Enter ourselves to preserve the text
 		this.editor.disableSubmit = true;
 		this.editor.onChange = () => {
 			this.invalidate();
 			this.tui.requestRender();
 		};
-	}
-
-	private allQuestionsAnswered(): boolean {
-		this.saveCurrentAnswer();
-		return this.answers.every((a) => (a?.trim() || "").length > 0);
 	}
 
 	private saveCurrentAnswer(): void {
@@ -198,21 +262,7 @@ class QnAComponent implements Component {
 
 	private submit(): void {
 		this.saveCurrentAnswer();
-
-		// Build the response text
-		const parts: string[] = [];
-		for (let i = 0; i < this.questions.length; i++) {
-			const q = this.questions[i];
-			const a = this.answers[i]?.trim() || "(no answer)";
-			parts.push(`Q: ${q.question}`);
-			if (q.context) {
-				parts.push(`> ${q.context}`);
-			}
-			parts.push(`A: ${a}`);
-			parts.push("");
-		}
-
-		this.onDone(parts.join("\n").trim());
+		this.onDone(formatAnswers(this.questions, this.answers));
 	}
 
 	private cancel(): void {
@@ -225,7 +275,6 @@ class QnAComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		// Handle confirmation dialog
 		if (this.showingConfirmation) {
 			if (matchesKey(data, Key.enter) || data.toLowerCase() === "y") {
 				this.submit();
@@ -240,13 +289,11 @@ class QnAComponent implements Component {
 			return;
 		}
 
-		// Global navigation and commands
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			this.cancel();
 			return;
 		}
 
-		// Tab / Shift+Tab for navigation
 		if (matchesKey(data, Key.tab)) {
 			if (this.currentIndex < this.questions.length - 1) {
 				this.navigateTo(this.currentIndex + 1);
@@ -262,8 +309,6 @@ class QnAComponent implements Component {
 			return;
 		}
 
-		// Arrow up/down for question navigation when editor is empty
-		// (Editor handles its own cursor navigation when there's content)
 		if (matchesKey(data, Key.up) && this.editor.getText() === "") {
 			if (this.currentIndex > 0) {
 				this.navigateTo(this.currentIndex - 1);
@@ -279,15 +324,11 @@ class QnAComponent implements Component {
 			}
 		}
 
-		// Handle Enter ourselves (editor's submit is disabled)
-		// Plain Enter moves to next question or shows confirmation on last question
-		// Shift+Enter adds a newline (handled by editor)
 		if (matchesKey(data, Key.enter) && !matchesKey(data, Key.shift("enter"))) {
 			this.saveCurrentAnswer();
 			if (this.currentIndex < this.questions.length - 1) {
 				this.navigateTo(this.currentIndex + 1);
 			} else {
-				// On last question - show confirmation
 				this.showingConfirmation = true;
 			}
 			this.invalidate();
@@ -295,107 +336,71 @@ class QnAComponent implements Component {
 			return;
 		}
 
-		// Pass to editor
 		this.editor.handleInput(data);
 		this.invalidate();
 		this.tui.requestRender();
 	}
 
 	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width) {
-			return this.cachedLines;
-		}
+		if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
 
 		const lines: string[] = [];
-		const boxWidth = Math.min(width - 4, 120); // Allow wider box
-		const contentWidth = boxWidth - 4; // 2 chars padding on each side
-
-		// Helper to create horizontal lines (dim the whole thing at once)
+		const boxWidth = Math.min(width - 4, 120);
+		const contentWidth = boxWidth - 4;
 		const horizontalLine = (count: number) => "─".repeat(count);
-
-		// Helper to create a box line
-		const boxLine = (content: string, leftPad: number = 2): string => {
+		const boxLine = (content: string, leftPad = 2): string => {
 			const paddedContent = " ".repeat(leftPad) + content;
 			const contentLen = visibleWidth(paddedContent);
 			const rightPad = Math.max(0, boxWidth - contentLen - 2);
 			return this.dim("│") + paddedContent + " ".repeat(rightPad) + this.dim("│");
 		};
+		const emptyBoxLine = (): string => this.dim("│") + " ".repeat(boxWidth - 2) + this.dim("│");
+		const padToWidth = (line: string): string => line + " ".repeat(Math.max(0, width - visibleWidth(line)));
 
-		const emptyBoxLine = (): string => {
-			return this.dim("│") + " ".repeat(boxWidth - 2) + this.dim("│");
-		};
-
-		const padToWidth = (line: string): string => {
-			const len = visibleWidth(line);
-			return line + " ".repeat(Math.max(0, width - len));
-		};
-
-		// Title
 		lines.push(padToWidth(this.dim("╭" + horizontalLine(boxWidth - 2) + "╮")));
 		const title = `${this.bold(this.cyan("Questions"))} ${this.dim(`(${this.currentIndex + 1}/${this.questions.length})`)}`;
 		lines.push(padToWidth(boxLine(title)));
 		lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 
-		// Progress indicator
 		const progressParts: string[] = [];
 		for (let i = 0; i < this.questions.length; i++) {
 			const answered = (this.answers[i]?.trim() || "").length > 0;
 			const current = i === this.currentIndex;
-			if (current) {
-				progressParts.push(this.cyan("●"));
-			} else if (answered) {
-				progressParts.push(this.green("●"));
-			} else {
-				progressParts.push(this.dim("○"));
-			}
+			if (current) progressParts.push(this.cyan("●"));
+			else if (answered) progressParts.push(this.green("●"));
+			else progressParts.push(this.dim("○"));
 		}
 		lines.push(padToWidth(boxLine(progressParts.join(" "))));
 		lines.push(padToWidth(emptyBoxLine()));
 
-		// Current question
-		const q = this.questions[this.currentIndex];
-		const questionText = `${this.bold("Q:")} ${q.question}`;
-		const wrappedQuestion = wrapTextWithAnsi(questionText, contentWidth);
-		for (const line of wrappedQuestion) {
+		const question = this.questions[this.currentIndex];
+		for (const line of wrapTextWithAnsi(`${this.bold("Q:")} ${question.question}`, contentWidth)) {
 			lines.push(padToWidth(boxLine(line)));
 		}
 
-		// Context if present
-		if (q.context) {
+		if (question.context) {
 			lines.push(padToWidth(emptyBoxLine()));
-			const contextText = this.gray(`> ${q.context}`);
-			const wrappedContext = wrapTextWithAnsi(contextText, contentWidth - 2);
-			for (const line of wrappedContext) {
+			for (const line of wrapTextWithAnsi(this.gray(`> ${question.context}`), contentWidth - 2)) {
 				lines.push(padToWidth(boxLine(line)));
 			}
 		}
 
 		lines.push(padToWidth(emptyBoxLine()));
 
-		// Render the editor component (multi-line input) with padding
-		// Skip the first and last lines (editor's own border lines)
 		const answerPrefix = this.bold("A: ");
-		const editorWidth = contentWidth - 4 - 3; // Extra padding + space for "A: "
+		const editorWidth = contentWidth - 7;
 		const editorLines = this.editor.render(editorWidth);
 		for (let i = 1; i < editorLines.length - 1; i++) {
-			if (i === 1) {
-				// First content line gets the "A: " prefix
-				lines.push(padToWidth(boxLine(answerPrefix + editorLines[i])));
-			} else {
-				// Subsequent lines get padding to align with the first line
-				lines.push(padToWidth(boxLine("   " + editorLines[i])));
-			}
+			if (i === 1) lines.push(padToWidth(boxLine(answerPrefix + editorLines[i])));
+			else lines.push(padToWidth(boxLine("   " + editorLines[i])));
 		}
 
 		lines.push(padToWidth(emptyBoxLine()));
-
-		// Confirmation dialog or footer with controls
+		lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 		if (this.showingConfirmation) {
-			lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 			const confirmMsg = `${this.yellow("Submit all answers?")} ${this.dim("(Enter/y to confirm, Esc/n to cancel)")}`;
 			lines.push(padToWidth(boxLine(truncateToWidth(confirmMsg, contentWidth))));
 		} else {
-			lines.push(padToWidth(this.dim("├" + horizontalLine(boxWidth - 2) + "┤")));
 			const controls = `${this.dim("Tab/Enter")} next · ${this.dim("Shift+Tab")} prev · ${this.dim("Shift+Enter")} newline · ${this.dim("Esc")} cancel`;
 			lines.push(padToWidth(boxLine(truncateToWidth(controls, contentWidth))));
 		}
@@ -407,118 +412,93 @@ class QnAComponent implements Component {
 	}
 }
 
+async function collectAnswers(ctx: ExtensionContext, questions: ExtractedQuestion[]): Promise<string | null> {
+	if (!ctx.hasUI) return null;
+	return ctx.ui.custom<string | null>((tui, _theme, _kb, done) => new QnAComponent(questions, tui, done));
+}
+
+function submitAnswers(pi: ExtensionAPI, answersText: string): void {
+	pi.sendUserMessage(ANSWERS_PREFIX + answersText);
+}
+
 export default function (pi: ExtensionAPI) {
+	let autoPromptInFlight = false;
+
 	const answerHandler = async (ctx: ExtensionContext) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("answer requires interactive mode", "error");
-				return;
-			}
+		if (!ctx.hasUI) {
+			ctx.ui.notify("answer requires interactive mode", "error");
+			return;
+		}
+		if (!ctx.model) {
+			ctx.ui.notify("No model selected", "error");
+			return;
+		}
 
-			if (!ctx.model) {
-				ctx.ui.notify("No model selected", "error");
-				return;
-			}
+		const lastAssistantText = findLastCompleteAssistantText(ctx);
+		if (!lastAssistantText) {
+			ctx.ui.notify("No assistant messages found", "error");
+			return;
+		}
 
-			// Find the last assistant message on the current branch
-			const branch = ctx.sessionManager.getBranch();
-			let lastAssistantText: string | undefined;
+		const extractionResult = await extractQuestionsFromText(ctx, lastAssistantText);
+		if (extractionResult === null) {
+			ctx.ui.notify("Cancelled", "info");
+			return;
+		}
+		if (extractionResult.questions.length === 0) {
+			ctx.ui.notify("No questions found in the last message", "info");
+			return;
+		}
 
-			for (let i = branch.length - 1; i >= 0; i--) {
-				const entry = branch[i];
-				if (entry.type === "message") {
-					const msg = entry.message;
-					if ("role" in msg && msg.role === "assistant") {
-						if (msg.stopReason !== "stop") {
-							ctx.ui.notify(`Last assistant message incomplete (${msg.stopReason})`, "error");
-							return;
-						}
-						const textParts = msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text);
-						if (textParts.length > 0) {
-							lastAssistantText = textParts.join("\n");
-							break;
-						}
-					}
-				}
-			}
+		const answersResult = await collectAnswers(ctx, extractionResult.questions);
+		if (answersResult === null) {
+			ctx.ui.notify("Cancelled", "info");
+			return;
+		}
 
-			if (!lastAssistantText) {
-				ctx.ui.notify("No assistant messages found", "error");
-				return;
-			}
-
-			// Select the best model for extraction (prefer Codex mini, then haiku)
-			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
-
-			// Run extraction with loader UI
-			const extractionResult = await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
-				const loader = new BorderedLoader(tui, theme, `Extracting questions using ${extractionModel.id}...`);
-				loader.onAbort = () => done(null);
-
-				const doExtract = async () => {
-					const apiKey = await ctx.modelRegistry.getApiKey(extractionModel);
-					const userMessage: UserMessage = {
-						role: "user",
-						content: [{ type: "text", text: lastAssistantText! }],
-						timestamp: Date.now(),
-					};
-
-					const response = await complete(
-						extractionModel,
-						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey, signal: loader.signal },
-					);
-
-					if (response.stopReason === "aborted") {
-						return null;
-					}
-
-					const responseText = response.content
-						.filter((c): c is { type: "text"; text: string } => c.type === "text")
-						.map((c) => c.text)
-						.join("\n");
-
-					return parseExtractionResult(responseText);
-				};
-
-				doExtract()
-					.then(done)
-					.catch(() => done(null));
-
-				return loader;
-			});
-
-			if (extractionResult === null) {
-				ctx.ui.notify("Cancelled", "info");
-				return;
-			}
-
-			if (extractionResult.questions.length === 0) {
-				ctx.ui.notify("No questions found in the last message", "info");
-				return;
-			}
-
-			// Show the Q&A component
-			const answersResult = await ctx.ui.custom<string | null>((tui, _theme, _kb, done) => {
-				return new QnAComponent(extractionResult.questions, tui, done);
-			});
-
-			if (answersResult === null) {
-				ctx.ui.notify("Cancelled", "info");
-				return;
-			}
-
-			// Send the answers directly as a message and trigger a turn
-			pi.sendMessage(
-				{
-					customType: "answers",
-					content: "I answered your questions in the following way:\n\n" + answersResult,
-					display: true,
-				},
-				{ triggerTurn: true },
-			);
+		submitAnswers(pi, answersResult);
 	};
+
+	pi.registerTool({
+		name: "ask_questions",
+		label: "Ask Questions",
+		description: "Ask the user one or more structured clarification questions and return their answers.",
+		promptSnippet: "Ask the user one or more structured clarification questions and return their answers.",
+		promptGuidelines: [
+			"When you need clarification, a decision, or missing information from the user, use ask_questions instead of asking plain-text questions in your assistant message.",
+			"Batch related questions into a single ask_questions call.",
+			"After the tool returns, continue the task using the user's answers.",
+		],
+		parameters: AskQuestionsParams,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!ctx.hasUI) {
+				return {
+					content: [{ type: "text", text: "Error: ask_questions requires interactive mode." }],
+					details: { questions: params.questions, cancelled: true },
+				};
+			}
+
+			if (params.questions.length === 0) {
+				return {
+					content: [{ type: "text", text: "Error: No questions provided." }],
+					details: { questions: [], cancelled: true },
+				};
+			}
+
+			const answersText = await collectAnswers(ctx, params.questions);
+			if (answersText === null) {
+				return {
+					content: [{ type: "text", text: "User cancelled answering the questions." }],
+					details: { questions: params.questions, cancelled: true },
+				};
+			}
+
+			return {
+				content: [{ type: "text", text: `User answered the questions:\n\n${answersText}` }],
+				details: { questions: params.questions, answersText, cancelled: false },
+			};
+		},
+	});
 
 	pi.registerCommand("answer", {
 		description: "Extract questions from last assistant message into interactive Q&A",
@@ -528,5 +508,37 @@ export default function (pi: ExtensionAPI) {
 	pi.registerShortcut("ctrl+.", {
 		description: "Extract and answer questions",
 		handler: answerHandler,
+	});
+
+	pi.on("agent_end", async (event, ctx) => {
+		if (autoPromptInFlight || !ctx.hasUI || !ctx.model) return;
+
+		const lastAssistant = [...event.messages]
+			.reverse()
+			.find(
+				(message) =>
+					(message as { role?: string; stopReason?: string }).role === "assistant" &&
+					(message as { stopReason?: string }).stopReason === "stop",
+			) as { content?: Array<{ type: string; text?: string }> } | undefined;
+		if (!lastAssistant) return;
+
+		const assistantText = getTextContent(lastAssistant.content);
+		if (!assistantText || !shouldAttemptAutomaticPrompt(assistantText)) return;
+
+		autoPromptInFlight = true;
+		try {
+			const extractionResult = await extractQuestionsFromText(ctx, assistantText);
+			if (!extractionResult || extractionResult.questions.length === 0) return;
+
+			const answersResult = await collectAnswers(ctx, extractionResult.questions);
+			if (answersResult === null) {
+				ctx.ui.notify("Question prompt cancelled", "info");
+				return;
+			}
+
+			submitAnswers(pi, answersResult);
+		} finally {
+			autoPromptInFlight = false;
+		}
 	});
 }
