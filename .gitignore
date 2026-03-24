@@ -3,6 +3,7 @@
 !extensions
 !extensions/**
 !skills
+!skills/**
 !prompts
 !themes
 !intercepted-commands
