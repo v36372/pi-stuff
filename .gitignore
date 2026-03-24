@@ -1,5 +1,8 @@
 *
 **/node_modules/*
+!agents
+!agents/**
+!AGENTS.md
 !extensions
 !extensions/**
 !skills
