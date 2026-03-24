@@ -141,6 +141,14 @@ function formatDiffReviewFeedbackForAgent(feedback: string, annotations: unknown
   return `${formattedAnnotations.join('\n\n')}\n\nPlease address this diff review feedback.`;
 }
 
+function buildPlanReviewKickoffMessage(planFilePath?: string): string {
+  if (planFilePath) {
+    return `Start a plan review for the existing plan file ${planFilePath}. Do not draft a new plan unless review feedback requires changes. Read the file and call submit_plan_review with filePath set to ${planFilePath}. Do not implement the plan.`;
+  }
+
+  return 'Start a plan review. Draft a plan only, create a new task-specific plan file, then call submit_plan_review with filePath set to that file. Do not implement the plan.';
+}
+
 async function runBrowserReview<T>(server: DecisionServer<T>, ctx: ExtensionContext): Promise<T> {
   const browserResult = openBrowser(server.url);
   if (browserResult.isRemote) {
@@ -230,12 +238,13 @@ export default function reviewExtension(pi: ExtensionAPI): void {
     description: 'Start or stop the plan review loop',
     handler: async (args, ctx) => {
       const nextPath = args?.trim();
+      const wasActive = phase === 'plan-review';
 
-      if (phase === 'plan-review') {
+      if (wasActive) {
         if (nextPath) {
           planFilePath = nextPath;
           persistState();
-          ctx.ui.notify(`Plan file changed to: ${planFilePath}`);
+          ctx.ui.notify(`Plan review is already active. Plan file changed to: ${planFilePath}`);
           return;
         }
         exitPlanReview(ctx);
@@ -247,6 +256,10 @@ export default function reviewExtension(pi: ExtensionAPI): void {
       }
 
       enterPlanReview(ctx);
+
+      if (ctx.isIdle()) {
+        pi.sendUserMessage(buildPlanReviewKickoffMessage(getPlanFilePath()));
+      }
     },
   });
 
@@ -456,7 +469,9 @@ export default function reviewExtension(pi: ExtensionAPI): void {
     return {
       message: {
         customType: 'plan-review-context',
-        content: `[PLAN REVIEW LOOP]\nYou are drafting a plan only. Do not implement the plan. Explore the codebase as needed, then write the plan to the configured plan file if one is already set; otherwise create a new task-specific plan file. Call submit_plan_review with filePath set to that file.\n\nIf the user requests changes, revise the same plan file and call submit_plan_review again with the same filePath. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.\n\nKeep the plan concise and execution-ready. Include:\n- Context\n- Approach\n- Files to modify\n- Reuse opportunities\n- Steps\n- Verification`,
+        content: getPlanFilePath()
+          ? `[PLAN REVIEW LOOP]\nYou are reviewing an existing plan file only. Do not implement the plan. Read the configured plan file and call submit_plan_review with filePath set to that file.\n\nIf the user requests changes, revise the same plan file and call submit_plan_review again with the same filePath. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.`
+          : `[PLAN REVIEW LOOP]\nYou are drafting a plan only. Do not implement the plan. Explore the codebase as needed, create a new task-specific plan file, write the plan there, and call submit_plan_review with filePath set to that file.\n\nIf the user requests changes, revise the same plan file and call submit_plan_review again with the same filePath. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.\n\nKeep the plan concise and execution-ready. Include:\n- Context\n- Approach\n- Files to modify\n- Reuse opportunities\n- Steps\n- Verification`,
         display: false,
       },
     };
