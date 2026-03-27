@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.62.0",
-  "defaultProvider": "github-copilot",
-  "defaultModel": "claude-haiku-4.5",
+  "lastChangelogVersion": "0.63.1",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.4",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "terayama",
@@ -16,7 +16,8 @@
       ],
       "skills": []
     },
-    "git:github.com/nicobailon/pi-mcp-adapter"
+    "git:github.com/nicobailon/pi-mcp-adapter",
+    "git:github.com/MasuRii/pi-tool-display"
   ],
   "extensions": [
     "+extensions/cmux/index.ts",

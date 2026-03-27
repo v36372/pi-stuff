@@ -691,9 +691,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-			if (!apiKey) {
-				if (ctx.hasUI) ctx.ui.notify(`No API key for ${ctx.model.provider}/${ctx.model.id}`, "error");
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+			if (!auth.ok) {
+				if (ctx.hasUI) ctx.ui.notify(auth.error, "error");
 				return;
 			}
 

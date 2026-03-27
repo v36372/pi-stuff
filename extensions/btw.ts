@@ -178,10 +178,13 @@ export default function (pi: ExtensionAPI) {
 				createWriteTool(ctx.cwd),
 			];
 
+			const requestAuth = await ctx.modelRegistry.getApiKeyAndHeaders(targetModel);
+			if (!requestAuth.ok) {
+				ctx.ui.notify(requestAuth.error, "error");
+				return;
+			}
+
 			const systemPrompt = ctx.getSystemPrompt();
-			const apiKeyResolver = async (_provider: string) => {
-				return ctx.modelRegistry.getApiKey(targetModel!);
-			};
 
 			// Serialize current conversation context for the subagent
 			const branch = ctx.sessionManager.getBranch();
@@ -211,7 +214,7 @@ export default function (pi: ExtensionAPI) {
 				tools,
 				targetModel,
 				thinkingLevel,
-				apiKeyResolver,
+				requestAuth,
 				undefined, // no abort signal — runs to completion
 				(progressResult) => {
 					// Update widget with live tool call feed

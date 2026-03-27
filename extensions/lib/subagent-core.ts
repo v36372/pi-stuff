@@ -399,7 +399,7 @@ export async function runSubagent(
 	tools: AgentTool<any>[],
 	model: any,
 	thinkingLevel: string,
-	apiKeyResolver: (provider: string) => Promise<string | undefined>,
+	requestAuth: { apiKey?: string; headers?: Record<string, string> },
 	signal: AbortSignal | undefined,
 	onProgress: (result: SingleResult) => void,
 ): Promise<SingleResult> {
@@ -439,7 +439,8 @@ export async function runSubagent(
 	const config: AgentLoopConfig = {
 		model,
 		convertToLlm: (msgs: AgentMessage[]) => convertToLlm(msgs),
-		getApiKey: apiKeyResolver,
+		getApiKey: () => requestAuth.apiKey,
+		headers: requestAuth.headers,
 		reasoning: thinkingLevel !== "off" ? (thinkingLevel as any) : undefined,
 	};
 

@@ -85,24 +85,39 @@ const ANSWERS_PREFIX = "Here are my answers:\n\n";
 const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
 const HAIKU_MODEL_ID = "claude-haiku-4-5";
 
+type RequestAuth =
+	| {
+			ok: true;
+			apiKey?: string;
+			headers?: Record<string, string>;
+	  }
+	| {
+			ok: false;
+			error: string;
+	  };
+
+function hasRequestCredentials(auth: RequestAuth): auth is Extract<RequestAuth, { ok: true }> {
+	return auth.ok && (auth.apiKey !== undefined || Object.keys(auth.headers ?? {}).length > 0);
+}
+
 async function selectExtractionModel(
 	currentModel: Model<Api>,
 	modelRegistry: {
 		find: (provider: string, modelId: string) => Model<Api> | undefined;
-		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
+		getApiKeyAndHeaders: (model: Model<Api>) => Promise<RequestAuth>;
 	},
 ): Promise<Model<Api>> {
 	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
 	if (codexModel) {
-		const apiKey = await modelRegistry.getApiKey(codexModel);
-		if (apiKey) return codexModel;
+		const auth = await modelRegistry.getApiKeyAndHeaders(codexModel);
+		if (hasRequestCredentials(auth)) return codexModel;
 	}
 
 	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
 	if (!haikuModel) return currentModel;
 
-	const apiKey = await modelRegistry.getApiKey(haikuModel);
-	if (!apiKey) return currentModel;
+	const auth = await modelRegistry.getApiKeyAndHeaders(haikuModel);
+	if (!hasRequestCredentials(auth)) return currentModel;
 
 	return haikuModel;
 }
@@ -180,7 +195,8 @@ async function extractQuestionsFromText(ctx: ExtensionContext, text: string): Pr
 		loader.onAbort = () => done(null);
 
 		const doExtract = async () => {
-			const apiKey = await ctx.modelRegistry.getApiKey(extractionModel);
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(extractionModel);
+			if (!auth.ok) throw new Error(auth.error);
 			const userMessage: UserMessage = {
 				role: "user",
 				content: [{ type: "text", text }],
@@ -190,7 +206,7 @@ async function extractQuestionsFromText(ctx: ExtensionContext, text: string): Pr
 			const response = await complete(
 				extractionModel,
 				{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-				{ apiKey, signal: loader.signal },
+				{ apiKey: auth.apiKey, headers: auth.headers, signal: loader.signal },
 			);
 
 			if (response.stopReason === "aborted") return null;
