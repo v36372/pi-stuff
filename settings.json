@@ -1,0 +1,25 @@
+{
+  "lastChangelogVersion": "0.62.0",
+  "defaultProvider": "github-copilot",
+  "defaultModel": "claude-haiku-4.5",
+  "hideThinkingBlock": false,
+  "defaultThinkingLevel": "high",
+  "theme": "terayama",
+  "packages": [
+    "git:github.com/hjanuschka/pi-multi-pass",
+    "git:github.com/pasky/chrome-cdp-skill",
+    "git:github.com/HazAT/pi-interactive-subagents",
+    {
+      "source": "git:github.com/HazAT/pi-autoresearch",
+      "extensions": [
+        "-extensions/pi-autoresearch/index.ts"
+      ],
+      "skills": []
+    },
+    "git:github.com/nicobailon/pi-mcp-adapter"
+  ],
+  "extensions": [
+    "+extensions/cmux/index.ts",
+    "+extensions/claude-tool/index.ts"
+  ]
+}

@@ -1,6 +1,10 @@
 *
 **/node_modules/*
 !agents
+!APPEND_SYSTEM.md
+!council.json
+!multi-pass.json
+!settings.json
 !agents/**
 !AGENTS.md
 !extensions
