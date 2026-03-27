@@ -1,6 +1,6 @@
 {
   "lastChangelogVersion": "0.63.1",
-  "defaultProvider": "openai-codex",
+  "defaultProvider": "openai-codex-2",
   "defaultModel": "gpt-5.4",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
@@ -17,7 +17,8 @@
       "skills": []
     },
     "git:github.com/nicobailon/pi-mcp-adapter",
-    "git:github.com/MasuRii/pi-tool-display"
+    "git:github.com/MasuRii/pi-tool-display",
+    "git:github.com/HazAT/glimpse"
   ],
   "extensions": [
     "+extensions/cmux/index.ts",
