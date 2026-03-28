@@ -3,8 +3,8 @@
   "defaultProvider": "openai-codex-2",
   "defaultModel": "gpt-5.4",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "high",
-  "theme": "terayama",
+  "defaultThinkingLevel": "xhigh",
+  "theme": "dark",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
     "git:github.com/pasky/chrome-cdp-skill",

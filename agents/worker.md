@@ -90,3 +90,8 @@ Load the commit skill and make a polished, descriptive commit:
 ```
 todo(action: "update", id: "TODO-xxxx", status: "closed")
 ```
+
+### 7. Exit
+
+- after final verification and summary, call subagent_done
+- do not remain idle after delivering the result
