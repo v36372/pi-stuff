@@ -16,7 +16,7 @@ import { keyHint } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { dirname, join } from "node:path";
-import { existsSync, unlinkSync, readFileSync } from "node:fs";
+import { existsSync, unlinkSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   isMuxAvailable,
@@ -124,6 +124,34 @@ function startWidgetRefresh() {
   widgetInterval = setInterval(updateWidget, 1000);
 }
 
+// ── Copy Claude session ──
+
+const CLAUDE_SESSIONS_DIR = join(
+  process.env.HOME ?? "/tmp",
+  ".pi",
+  "agent",
+  "sessions",
+  "claude-code",
+);
+
+function copyClaudeSession(sentinelFile: string): string | null {
+  try {
+    const transcriptFile = sentinelFile + ".transcript";
+    if (!existsSync(transcriptFile)) return null;
+
+    const transcriptPath = readFileSync(transcriptFile, "utf-8").trim();
+    if (!transcriptPath || !existsSync(transcriptPath)) return null;
+
+    mkdirSync(CLAUDE_SESSIONS_DIR, { recursive: true });
+    const filename = transcriptPath.split("/").pop() ?? `claude-${Date.now()}.jsonl`;
+    const dest = join(CLAUDE_SESSIONS_DIR, filename);
+    copyFileSync(transcriptPath, dest);
+    return filename;
+  } catch {
+    return null;
+  }
+}
+
 // ── watchClaude ──
 
 async function watchClaude(running: RunningClaude, signal: AbortSignal, pi: ExtensionAPI): Promise<void> {
@@ -168,7 +196,12 @@ async function watchClaude(running: RunningClaude, signal: AbortSignal, pi: Exte
     }
 
     closeSurface(surface);
+
+    // Copy Claude session file to pi sessions folder
+    const sessionId = copyClaudeSession(sentinelFile);
+
     try { unlinkSync(sentinelFile); } catch {}
+    try { unlinkSync(sentinelFile + ".transcript"); } catch {}
     runningClaude.delete(running.id);
     updateWidget();
 
@@ -182,6 +215,7 @@ async function watchClaude(running: RunningClaude, signal: AbortSignal, pi: Exte
           prompt: running.prompt,
           elapsed,
           id: running.id,
+          ...(sessionId ? { sessionFile: sessionId } : {}),
         },
       },
       { triggerTurn: true, deliverAs: "steer" },
@@ -189,6 +223,7 @@ async function watchClaude(running: RunningClaude, signal: AbortSignal, pi: Exte
   } catch (err: any) {
     try { closeSurface(surface); } catch {}
     try { unlinkSync(sentinelFile); } catch {}
+    try { unlinkSync(sentinelFile + ".transcript"); } catch {}
     runningClaude.delete(running.id);
     updateWidget();
 

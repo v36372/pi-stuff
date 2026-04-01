@@ -4,7 +4,7 @@ description: Autonomous experiment worker — runs a batch of autoresearch exper
 tools: read, bash, write, edit
 model: anthropic/claude-opus-4-6
 thinking: medium
-spawning: false
+spawning: true
 auto-exit: true
 ---
 

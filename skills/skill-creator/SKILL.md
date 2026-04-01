@@ -3,17 +3,6 @@ name: skill-creator
 description: Create new agent skills following the Agent Skills specification. Use when asked to "create a skill", "add a new skill", "write a skill", "make a skill", "build a skill", or scaffold a new skill with SKILL.md. Guides through requirements, planning, writing, registration, and verification.
 ---
 
-<!--
-Adapted from skill-creator implementations by Anthropic and OpenAI:
-https://github.com/anthropics/skills/tree/main/skills/skill-creator
-https://github.com/openai/skills/tree/main/skills/.system/skill-creator
-
-References:
-- Agent Skills specification: https://agentskills.io/specification
-- Skill authoring best practices: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
-- Validation library: https://github.com/agentskills/agentskills/tree/main/skills-ref
--->
-
 # Create a New Skill
 
 Guide the user through creating a new agent skill following the [Agent Skills specification](https://agentskills.io/specification). Follow each step in order.

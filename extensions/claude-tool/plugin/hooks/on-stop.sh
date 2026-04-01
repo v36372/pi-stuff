@@ -54,6 +54,11 @@ print(count)
 EOF
 )
 
+# Always write transcript path so the watcher can copy the session file
+if [ -n "$transcript_path" ]; then
+  echo "$transcript_path" > "${PI_CLAUDE_SENTINEL}.transcript" 2>/dev/null || true
+fi
+
 # If exactly 1 user message (the initial prompt), this was autonomous — signal completion
 if [ "$user_msg_count" -eq 1 ]; then
   # Write last_assistant_message to sentinel so the watcher gets a clean result

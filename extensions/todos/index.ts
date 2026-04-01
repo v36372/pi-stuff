@@ -1,6 +1,6 @@
 /**
  * This extension stores todo items as files under <todo-dir> (defaults to
- * ~/.pi/history/<project>/todos, or the path in PI_TODO_PATH).  Each todo is a
+ * <agentDir>/sessions/<encoded-cwd>/todos, or the path in PI_TODO_PATH).  Each todo is a
  * standalone markdown file named <id>.md and an optional <id>.lock file is used
  * while a session is editing it.
  *
@@ -30,14 +30,14 @@
  * Use `/todos` to bring up the visual todo manager or just let the LLM use them
  * naturally.
  */
-import { DynamicBorder, copyToClipboard, getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, copyToClipboard, getAgentDir, getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
-import os from "node:os";
+
 import {
 	Container,
 	type Focusable,
@@ -57,7 +57,6 @@ import {
 } from "@mariozechner/pi-tui";
 
 const TODO_PATH_ENV = "PI_TODO_PATH";
-const GLOBAL_PI_DIR = path.join(os.homedir(), ".pi", "history");
 const TODO_SETTINGS_NAME = "settings.json";
 const TODO_ID_PREFIX = "TODO-";
 const TODO_ID_PATTERN = /^[a-f0-9]{8}$/i;
@@ -706,8 +705,8 @@ class TodoDetailOverlayComponent {
 	}
 }
 
-function getProjectSlug(cwd: string): string {
-	return path.basename(cwd);
+function encodeCwdPath(cwd: string): string {
+	return `--${cwd.replace(/^[\/\\]/, "").replace(/[\/\\:]/g, "-")}--`;
 }
 
 function getTodosDir(cwd: string): string {
@@ -715,7 +714,7 @@ function getTodosDir(cwd: string): string {
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
-	return path.join(GLOBAL_PI_DIR, getProjectSlug(cwd), "todos");
+	return path.join(getAgentDir(), "sessions", encodeCwdPath(cwd), "todos");
 }
 
 function getTodosDirLabel(cwd: string): string {
@@ -723,7 +722,7 @@ function getTodosDirLabel(cwd: string): string {
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
-	return path.join("~/.pi/history", getProjectSlug(cwd), "todos");
+	return path.join(getAgentDir(), "sessions", encodeCwdPath(cwd), "todos");
 }
 
 function getTodoSettingsPath(todosDir: string): string {
@@ -1794,7 +1793,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("todos", {
-		description: "List todos from ~/.pi/history/<project>/todos",
+		description: "List todos from <agentDir>/sessions/<cwd>/todos",
 		getArgumentCompletions: (argumentPrefix: string) => {
 			const todos = listTodosSync(getTodosDir(process.cwd()));
 			if (!todos.length) return null;
