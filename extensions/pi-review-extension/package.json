@@ -18,9 +18,9 @@
     "diff-review.html"
   ],
   "scripts": {
-    "build:plan-review-ui": "vite build --config vite.plan-review.config.ts",
-    "build:diff-review-ui": "vite build --config vite.diff-review.config.ts",
-    "build": "bun run build:plan-review-ui && bun run build:diff-review-ui && cp dist-plan-review/index.html plan-review.html && cp dist-diff-review/index.html diff-review.html"
+    "build:plan-review-ui": "mkdir -p dist-plan-review && cp plan-review.html dist-plan-review/index.html",
+    "build:diff-review-ui": "mkdir -p dist-diff-review && cp diff-review.html dist-diff-review/index.html",
+    "build": "bun run build:plan-review-ui && bun run build:diff-review-ui"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",

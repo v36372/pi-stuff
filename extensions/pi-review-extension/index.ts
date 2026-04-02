@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Type } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@mariozechner/pi-coding-agent';
@@ -63,7 +62,9 @@ function getStartupErrorMessage(err: unknown): string {
 }
 
 function getMessageText(message: AgentMessage): string {
-  const content = message.content;
+  if (!('content' in message)) return '';
+
+  const { content } = message;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
@@ -143,10 +144,10 @@ function formatDiffReviewFeedbackForAgent(feedback: string, annotations: unknown
 
 function buildPlanReviewKickoffMessage(planFilePath?: string): string {
   if (planFilePath) {
-    return `Start a plan review for the existing plan file ${planFilePath}. Do not draft a new plan unless review feedback requires changes. Read the file and call submit_plan_review with filePath set to ${planFilePath}. Do not implement the plan.`;
+    return `Start a plan review for the existing plan file ${planFilePath}. Do not draft a new plan unless review feedback requires changes. Read the file, then submit it for review using execute_command({ command: "/submit-plan ${planFilePath}" }). Do not implement the plan.`;
   }
 
-  return 'Start a plan review. Draft a plan only, create a new task-specific plan file, then call submit_plan_review with filePath set to that file. Do not implement the plan.';
+  return 'Start a plan review. Draft a plan only, create a new task-specific plan file, write the plan there, then submit it for review using execute_command({ command: "/submit-plan <filepath>" }). Do not implement the plan.';
 }
 
 async function runBrowserReview<T>(server: DecisionServer<T>, ctx: ExtensionContext): Promise<T> {
@@ -303,97 +304,61 @@ export default function reviewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerTool({
-    name: 'submit_plan_review',
-    label: 'Submit Plan Review',
-    description:
-      'Submit the current plan for review. Call this after drafting or revising the plan. ' +
-      'If the user requests changes, revise the plan and call this tool again. ' +
-      'If the user approves the plan, stop and wait for the next instruction.',
-    parameters: Type.Object({
-      summary: Type.Optional(Type.String({ description: 'Brief summary of the plan' })),
-      filePath: Type.Optional(Type.String({ description: 'Optional path to the plan file' })),
-      plan: Type.Optional(Type.String({ description: 'Optional inline plan markdown to review' })),
-    }),
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+  pi.registerCommand('submit-plan', {
+    description: 'Submit the current plan for review (opens browser review UI)',
+    handler: async (args, ctx) => {
       if (phase !== 'plan-review' && !(pi.getFlag('auto-plan-review') === true && maybeAutoEnterPlanReview(ctx))) {
-        return {
-          content: [{ type: 'text', text: 'Error: Plan review is not active. Use /plan-review first.' }],
-          details: { approved: false },
-        };
+        ctx.ui.notify('Plan review is not active. Use /plan-review first.', 'error');
+        return;
       }
 
-      const inlinePlan = typeof params.plan === 'string' ? params.plan : undefined;
-      const explicitFilePath = typeof params.filePath === 'string' && params.filePath.trim() ? params.filePath.trim() : undefined;
+      const explicitFilePath = args?.trim() || undefined;
 
       if (explicitFilePath) {
         planFilePath = explicitFilePath;
         persistState();
       }
 
-      let planContent = inlinePlan;
-      if (!planContent) {
-        const fullPath = resolvePlanPath(ctx.cwd, explicitFilePath);
-        if (!fullPath) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Error: No plan file was provided. Create a task-specific plan file and call submit_plan_review with filePath, or pass the plan inline with plan.',
-              },
-            ],
-            details: { approved: false },
-          };
-        }
-        try {
-          planContent = readFileSync(fullPath, 'utf-8');
-        } catch {
-          const targetPath = explicitFilePath || getPlanFilePath();
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error: ${targetPath || 'The provided plan file'} does not exist. Write the plan first, then call submit_plan_review again.`,
-              },
-            ],
-            details: { approved: false },
-          };
-        }
+      const fullPath = resolvePlanPath(ctx.cwd, explicitFilePath);
+      if (!fullPath) {
+        pi.sendUserMessage(
+          'Error: No plan file was provided. Create a task-specific plan file and submit it using execute_command({ command: "/submit-plan <filepath>" }).',
+        );
+        return;
       }
 
-      if (!planContent || planContent.trim().length === 0) {
-        return {
-          content: [{ type: 'text', text: 'Error: The plan is empty. Draft the plan first, then submit it again.' }],
-          details: { approved: false },
-        };
+      let planContent: string;
+      try {
+        planContent = readFileSync(fullPath, 'utf-8');
+      } catch {
+        const targetPath = explicitFilePath || getPlanFilePath();
+        pi.sendUserMessage(
+          `Error: ${targetPath || 'The provided plan file'} does not exist. Write the plan first, then submit it again.`,
+        );
+        return;
+      }
+
+      if (!planContent.trim()) {
+        pi.sendUserMessage('Error: The plan is empty. Draft the plan first, then submit it again.');
+        return;
       }
 
       if (!ctx.hasUI) {
         phase = 'idle';
         planFilePath = '';
         persistState();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'Plan auto-approved (non-interactive mode). Do not implement the plan. Stop here and wait for the next instruction.',
-            },
-          ],
+        pi.sendMessage({
+          customType: 'plan-review-result',
+          content: 'Plan auto-approved (non-interactive mode). Do not implement the plan. Stop here and wait for the next instruction.',
+          display: true,
           details: { approved: true },
-        };
+        });
+        return;
       }
 
       if (!planReviewHtmlContent) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: "Error: Plan review UI not available. Run 'bun run build:pi-review-extension' first.",
-            },
-          ],
-          details: { approved: false },
-        };
+        ctx.ui.notify("Plan review UI not available. Run 'bun run build:pi-review-extension' first.", 'error');
+        return;
       }
 
       let server: PlanServerResult;
@@ -404,12 +369,8 @@ export default function reviewExtension(pi: ExtensionAPI): void {
           origin: 'pi',
         });
       } catch (err) {
-        const message = `Failed to start plan review UI: ${getStartupErrorMessage(err)}`;
-        ctx.ui.notify(message, 'error');
-        return {
-          content: [{ type: 'text', text: message }],
-          details: { approved: false },
-        };
+        ctx.ui.notify(`Failed to start plan review UI: ${getStartupErrorMessage(err)}`, 'error');
+        return;
       }
 
       const result = await runBrowserReview(server, ctx);
@@ -418,46 +379,21 @@ export default function reviewExtension(pi: ExtensionAPI): void {
         planFilePath = '';
         persistState();
 
-        if (result.feedback) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  'Plan approved with notes. Do not implement the plan. Stop here and wait for the next instruction.\n\n' +
-                  '## Notes\n\n' +
-                  result.feedback,
-              },
-            ],
-            details: { approved: true, feedback: result.feedback },
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'Plan approved. Do not implement the plan. Stop here and wait for the next instruction.',
-            },
-          ],
-          details: { approved: true },
-        };
+        pi.sendMessage({
+          customType: 'plan-review-result',
+          content: result.feedback
+            ? 'Plan approved with notes. Do not implement the plan. Stop here and wait for the next instruction.\n\n## Notes\n\n' + result.feedback
+            : 'Plan approved. Do not implement the plan. Stop here and wait for the next instruction.',
+          display: true,
+          details: result.feedback ? { approved: true, feedback: result.feedback } : { approved: true },
+        });
+        return;
       }
 
       const feedbackText = result.feedback || 'Plan changes requested.';
-      return {
-        content: [
-          {
-            type: 'text',
-            text: planDenyFeedback(
-              feedbackText,
-              'submit_plan_review',
-              inlinePlan ? undefined : { planFilePath: explicitFilePath || getPlanFilePath() },
-            ),
-          },
-        ],
-        details: { approved: false, feedback: feedbackText },
-      };
+      pi.sendUserMessage(
+        planDenyFeedback(feedbackText, { planFilePath: explicitFilePath || getPlanFilePath() }),
+      );
     },
   });
 
@@ -466,12 +402,17 @@ export default function reviewExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    const configuredPlanFilePath = getPlanFilePath();
+    const submitInstruction = configuredPlanFilePath
+      ? `use execute_command({ command: "/submit-plan ${configuredPlanFilePath}" })`
+      : 'use execute_command({ command: "/submit-plan <filepath>" })';
+
     return {
       message: {
         customType: 'plan-review-context',
-        content: getPlanFilePath()
-          ? `[PLAN REVIEW LOOP]\nYou are reviewing an existing plan file only. Do not implement the plan. Read the configured plan file and call submit_plan_review with filePath set to that file.\n\nIf the user requests changes, revise the same plan file and call submit_plan_review again with the same filePath. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.`
-          : `[PLAN REVIEW LOOP]\nYou are drafting a plan only. Do not implement the plan. Explore the codebase as needed, create a new task-specific plan file, write the plan there, and call submit_plan_review with filePath set to that file.\n\nIf the user requests changes, revise the same plan file and call submit_plan_review again with the same filePath. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.\n\nKeep the plan concise and execution-ready. Include:\n- Context\n- Approach\n- Files to modify\n- Reuse opportunities\n- Steps\n- Verification`,
+        content: configuredPlanFilePath
+          ? `[PLAN REVIEW LOOP]\nYou are reviewing an existing plan file only. Do not implement the plan. Read the configured plan file and ${submitInstruction} to submit it for review.\n\nIf the user requests changes, revise the same plan file and resubmit the same way. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.`
+          : `[PLAN REVIEW LOOP]\nYou are drafting a plan only. Do not implement the plan. Explore the codebase as needed, create a new task-specific plan file, write the plan there, and ${submitInstruction} to submit it for review.\n\nIf the user requests changes, revise the same plan file and resubmit the same way. Repeat until the plan is approved. Once the plan is approved, stop and wait for the user's next instruction.\n\nKeep the plan concise and execution-ready. Include:\n- Context\n- Approach\n- Files to modify\n- Reuse opportunities\n- Steps\n- Verification`,
         display: false,
       },
     };

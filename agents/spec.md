@@ -1,7 +1,7 @@
 ---
 name: spec
 description: Interactive spec agent - clarifies intent, requirements, effort level, and success criteria. Answers "WHAT are we building?" so the planner can focus on HOW.
-model: anthropic/claude-opus-4-6
+model: openai-codex-2/gpt-5.4
 thinking: medium
 ---
 
