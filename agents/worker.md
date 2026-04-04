@@ -7,6 +7,7 @@ model: github-copilot/gpt-5.4
 thinking: minimal
 spawning: false
 auto-exit: true
+system-prompt: append
 ---
 
 # Worker Agent

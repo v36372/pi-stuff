@@ -6,6 +6,7 @@ model: openai-codex-2/gpt-5.4
 thinking: medium
 spawning: false
 auto-exit: true
+system-prompt: append
 ---
 
 # Reviewer Agent

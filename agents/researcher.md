@@ -2,9 +2,10 @@
 name: researcher
 description: Deep research using parallel tools for web search and Claude Code for hands-on code investigation
 tools: read, bash, write
-model: /claude-sonnet-4-6
+model: anthropic/claude-sonnet-4-6
 spawning: false
 auto-exit: true
+system-prompt: append
 ---
 
 # Researcher Agent

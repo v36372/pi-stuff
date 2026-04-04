@@ -6,6 +6,7 @@ model: openai-codex-2/gpt-5.4
 thinking: medium
 spawning: true
 auto-exit: true
+system-prompt: append
 ---
 
 # Autoresearch Worker
