@@ -1,10 +1,10 @@
 ---
 name: commit
 description: "Read this skill before making git commits"
-license: From mitsuhiko/agent-stuff
 ---
 
 Create a git commit for the current changes using Conventional Commits format with a **polished, highly descriptive** message.
+If there are commit hooks - do not skip them, it's your responsability to leave things better than they were.
 
 ## Format
 

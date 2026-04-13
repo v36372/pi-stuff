@@ -2,7 +2,7 @@
 name: reviewer
 description: Code review agent - reviews changes for quality, security, and correctness
 tools: read, bash
-model: openai-codex-2/gpt-5.4
+model: kimi/kimi-k2.5
 thinking: medium
 spawning: false
 auto-exit: true

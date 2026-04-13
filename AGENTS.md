@@ -71,8 +71,6 @@ Many projects contain agent instruction files from other tools. Be mindful of th
 - **Skills:** `.claude/skills/` — can be registered in `.pi/settings.json` for pi to use directly
 - **Settings:** `.claude/settings.json` — permissions and tool configuration
 
-When entering an unfamiliar project, check for these files. Their conventions override your defaults. Use the `learn-codebase` skill for a thorough scan.
-
 ### Read Before You Edit
 
 Never propose changes to code you haven't read. If you need to modify a file:
@@ -154,30 +152,6 @@ When something breaks, don't guess — investigate first.
 
 Avoid shotgun debugging ("let me try this... nope, what about this..."). If you're making random changes hoping something works, you don't understand the problem yet.
 
-### Thoughtful Questions
-
-Only ask questions that require human judgment or preference. Before asking, consider:
-
-- Can I check the codebase for conventions? → Do it
-- Can I try something and see if it works? → Do it  
-- Can I make a reasonable default choice? → Do it
-
-**Good questions** require human input:
-- "Should this be a breaking change or maintain backwards compatibility?"
-- "What's the business logic when X happens?"
-
-**Wasteful questions** you could answer yourself:
-- "Do you want me to handle errors?" (obviously yes)
-- "Does this file exist?" (check yourself)
-
-When you have multiple questions, use `/answer` to open a structured Q&A interface — don't make the user answer inline in a wall of text.
-
-### Self-Invoke Commands
-
-You can execute slash commands yourself using the `execute_command` tool:
-- **Run `/answer`** after asking multiple questions — don't make the user invoke it
-- **Send follow-up prompts** to yourself
-
 ### Delegate to Subagents
 
 **Prefer subagent delegation** for any task that involves multiple steps or could benefit from specialized focus.
@@ -241,7 +215,7 @@ Subagents are full pi sessions — all extensions and skills auto-discover. A su
 **`auto-exit: true` frontmatter field** — Set in agent definition `.md` files to make the agent auto-shutdown when its turn ends, without needing to call `subagent_done`. Use for autonomous agents (scout, worker, reviewer). Don't use for interactive agents (spec, planner). Safety: if the user sends any input during the session, auto-exit is permanently disabled for that session.
 
 **Slash commands:**
-- `/plan <what to build>` — start the full planning workflow (investigate → spec → planner → execute → review)
+- `/plan <what to build>` — start the full planning workflow (assess → scout → spec → planner → execute → review)
 - `/subagent <agent> <task>` — spawn a subagent by name (e.g., `/subagent scout analyze auth module`)
 - `/iterate [task]` — fork session for quick fixes
 
@@ -276,19 +250,5 @@ subagent({
 **Default to delegation for anything substantial.**
 
 ### Skill Triggers
-
-Skills provide specialized instructions for specific tasks. Load them when the context matches.
-
-| When... | Load skill... |
-|---------|---------------|
-| Starting work in a new/unfamiliar project, or asked to learn conventions | `learn-codebase` |
-| Making git commits (always — every commit must be polished and descriptive) | `commit` |
-| Starting, stopping, or configuring Docker/OrbStack services | `dev-environment` |
-| Building web components, pages, or frontend interfaces | `frontend-design` |
-| Working with GitHub | `github` |
-| Asked to simplify/clean up/refactor code | `code-simplifier` |
-| Reading, reviewing, or analyzing a pi session JSONL file | `session-reader` |
-| Adding or configuring an MCP server (global or project-local) | `add-mcp-server` |
-| Running dev servers, test watchers, background tasks, or any process in a separate terminal | `cmux` |
 
 **The `commit` skill is mandatory for every single commit.** No quick `git commit -m "fix stuff"` — every commit gets the full treatment with a descriptive subject and body.

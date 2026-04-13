@@ -259,30 +259,40 @@ export default function (pi: ExtensionAPI) {
     runningClaude.clear();
   });
 
+  // Respect PI_DENY_TOOLS (set by subagent launcher from deny-tools frontmatter)
+  const deniedTools = new Set(
+    (process.env.PI_DENY_TOOLS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  if (deniedTools.has("claude")) return;
+
   pi.registerTool({
     name: "claude",
     label: "Claude Code",
     description:
-      "Spawn a self-driving Claude Code session for deep investigation and research. " +
-      "Claude Code has full autonomy: web search, bash, file access, git clone, curl, code editing — everything. " +
-      "Use it as a hands-off research agent that investigates topics, clones repos, downloads and analyzes links, " +
-      "tries things out, and comes back with detailed findings. " +
+      "Spawn a self-driving Claude Code session for deep hands-on investigation, experimentation, and code exploration. " +
+      "Claude Code has full autonomy: bash, file access, git clone, code editing, running tests, building projects — everything. " +
+      "Use it for tasks that require checking out code, trying things, running experiments, and multi-step hands-on work. " +
+      "NOT for web research or URL fetching — use parallel_search/parallel_research/parallel_extract for those. " +
       "IMPORTANT: This tool returns IMMEDIATELY — the session runs asynchronously in the background. " +
       "Results are delivered later via a steer message. Do NOT fabricate or assume results.",
 
     promptSnippet:
-      "Spawn a self-driving Claude Code session for deep investigation and research. " +
-      "Claude Code has full autonomy: web search, bash, file access, git clone, curl, code editing — everything. " +
-      "Use it as a hands-off research agent that investigates topics, clones repos, downloads and analyzes links, " +
-      "tries things out, and comes back with detailed findings. " +
-      "IMPORTANT: This tool returns IMMEDIATELY — results delivered via steer message. " +
+      "Spawn a self-driving Claude Code session for deep hands-on investigation and experimentation. " +
+      "Full autonomy: bash, git clone, code editing, running tests, building projects — everything a developer can do in a terminal. " +
+      "Use for: cloning and exploring repos, trying out libraries, running experiments, multi-file investigations, prototyping approaches. " +
+      "NOT for web research or URL fetching — use parallel_search/parallel_research/parallel_extract for those. " +
+      "IMPORTANT: Returns IMMEDIATELY — results delivered via steer message. " +
       "Do NOT fabricate or assume results. Set resumeSessionId to continue a previous session.",
 
     promptGuidelines: [
-      "Use claude as your go-to research and investigation tool — it's a fully autonomous agent with web search, bash, git, curl, and all coding tools.",
-      "Delegate to claude when: investigating a library/API, exploring a repo, downloading and analyzing links, deep multi-file investigations, trying out approaches, or any task that benefits from autonomous exploration.",
+      "Use claude for deep hands-on investigation that requires running code, cloning repos, building projects, or experimenting with approaches — it's a fully autonomous coding agent.",
+      "Delegate to claude when: exploring a repo's internals, trying out a library hands-on, prototyping an approach, running multi-step experiments, debugging complex issues, or any task that needs a terminal and file system access.",
+      "Do NOT use claude for web research, searching the web, fetching URLs, or reading documentation online — use parallel_search, parallel_research, and parallel_extract for those. Claude is for code-level, hands-on work.",
       "For simple file reads, single edits, or quick commands you already know the answer to — use your own tools directly, don't spawn a full session.",
-      "Give claude clear investigation goals and let it drive — it will clone repos, read docs, try things, and report back.",
+      "Give claude clear investigation goals and let it drive — it will clone repos, read code, try things, run tests, and report back with concrete findings.",
     ],
 
     parameters: Type.Object({

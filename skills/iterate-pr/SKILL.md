@@ -1,7 +1,6 @@
 ---
 name: iterate-pr
 description: Iterate on a PR until CI passes. Use when you need to fix CI failures, address review feedback, or continuously push fixes until all checks are green. Automates the feedback-fix-push-wait cycle.
-license: Adapted from getsentry/skills
 ---
 
 # Iterate on PR Until CI Passes

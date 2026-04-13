@@ -1,9 +1,9 @@
 {
-  "lastChangelogVersion": "0.65.0",
-  "defaultProvider": "openai-codex-2",
-  "defaultModel": "gpt-5.4",
-  "hideThinkingBlock": false,
-  "defaultThinkingLevel": "xhigh",
+  "lastChangelogVersion": "0.66.1",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k2.5",
+  "hideThinkingBlock": true,
+  "defaultThinkingLevel": "high",
   "theme": "terayama",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
@@ -17,11 +17,14 @@
       "skills": []
     },
     "git:github.com/MasuRii/pi-tool-display",
+    "git:github.com:HazAT/pi-parallel",
     "git:github.com/HazAT/glimpse",
     "git:github.com/HazAT/pi-smart-sessions"
   ],
   "extensions": [
     "+extensions/cmux/index.ts",
     "+extensions/claude-tool/index.ts"
-  ]
+  ],
+  "collapseChangelog": true,
+  "quietStartup": true
 }
