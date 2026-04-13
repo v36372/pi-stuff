@@ -2,7 +2,7 @@
 name: researcher
 description: Deep research using parallel tools for web search and Claude Code for hands-on code investigation
 tools: read, bash, write
-model: kimi/kimi-k2.5
+model: opencode-go/kimi-k2.5
 spawning: false
 auto-exit: true
 system-prompt: append

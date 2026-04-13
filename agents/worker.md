@@ -3,7 +3,7 @@ name: worker
 description: Implements tasks from todos - writes code, runs tests, commits with polished messages
 tools: read, bash, write, edit
 deny-tools: claude
-model: zai/glm-5.1
+model: opencode-go/glm-5.1
 thinking: minimal
 spawning: false
 auto-exit: true

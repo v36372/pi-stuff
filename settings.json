@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.66.1",
   "defaultProvider": "opencode-go",
-  "defaultModel": "kimi-k2.5",
+  "defaultModel": "glm-5.1",
   "hideThinkingBlock": true,
   "defaultThinkingLevel": "high",
   "theme": "terayama",

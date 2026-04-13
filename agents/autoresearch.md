@@ -2,7 +2,7 @@
 name: autoresearch
 description: Autonomous experiment worker — runs a batch of autoresearch experiments, then self-terminates
 tools: read, bash, write, edit
-model: zai/glm-4.5-air
+model: opencode-go/glm-4.5-air
 thinking: medium
 spawning: true
 auto-exit: true

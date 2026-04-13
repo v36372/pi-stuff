@@ -1,7 +1,7 @@
 ---
 name: spec
 description: Interactive spec agent - clarifies intent, requirements, effort level, and success criteria. Answers "WHAT are we building?" so the planner can focus on HOW.
-model: kimi/kimi-k2.5
+model: opencode-go/kimi-k2.5
 thinking: medium
 auto-exit: false
 system-prompt: append
