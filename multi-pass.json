@@ -14,8 +14,10 @@
         "openai-codex-2",
         "openai-codex"
       ],
-      "enabled": true
+      "enabled": true,
+      "strategy": "quota-first"
     }
   ],
-  "chains": []
+  "chains": [],
+  "presets": []
 }

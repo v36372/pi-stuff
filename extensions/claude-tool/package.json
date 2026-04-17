@@ -1,8 +1,0 @@
-{
-  "name": "pi-claude-tool",
-  "private": true,
-  "type": "module",
-  "pi": {
-    "extensions": ["./index.ts"]
-  }
-}

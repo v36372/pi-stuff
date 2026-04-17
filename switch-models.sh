@@ -42,12 +42,12 @@ apply_openai() {
     echo "Switching to OpenAI profile..."
     update_agent_model "spec" "openai-codex-2/gpt-5.4"
     update_agent_model "planner" "openai-codex-2/gpt-5.4"
-    update_agent_model "researcher" "openai/gpt-5.4"
-    update_agent_model "autoresearch" "openai/gpt-4.1"
-    update_agent_model "scout" "openai/gpt-4.1"
+    update_agent_model "researcher" "openai-codex/gpt-5.4"
+    update_agent_model "autoresearch" "openai-codex/gpt-5.4"
+    update_agent_model "scout" "openai-codex/gpt-5.3"
     update_agent_model "worker" "openai-codex-2/gpt-5.4"
     update_agent_model "reviewer" "openai-codex-2/gpt-5.4"
-    update_agent_model "visual-tester" "openai/gpt-5.4"
+    update_agent_model "visual-tester" "openai-codex/gpt-5.4"
 }
 
 # Apply OpenCode Go profile
