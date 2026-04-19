@@ -1,9 +1,9 @@
 {
-  "lastChangelogVersion": "0.67.6",
+  "lastChangelogVersion": "0.67.68",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.4",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "xhigh",
   "theme": "the-silver-case",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
@@ -23,6 +23,6 @@
   "collapseChangelog": true,
   "quietStartup": true,
   "doubleEscapeAction": "tree",
-  "treeFilterMode": "user-only",
+  "treeFilterMode": "no-tools",
   "enableInstallTelemetry": false
 }
