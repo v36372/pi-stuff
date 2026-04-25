@@ -1,21 +1,22 @@
 {
-  "lastChangelogVersion": "0.67.68",
+  "lastChangelogVersion": "0.70.2",
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.4",
+  "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "xhigh",
-  "theme": "the-silver-case",
+  "defaultThinkingLevel": "high",
+  "theme": "tokyo-moon",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
     "git:github.com/MasuRii/pi-tool-display",
-    "git:github.com/nicobailon/pi-interview-tool",
     "git:github.com/HazAT/pi-smart-sessions",
     "git:github.com/pasky/chrome-cdp-skill",
-    "-git:github.com/HazAT/glimpse",
     "git:github.com/HazAT/pi-interactive-subagents",
     "-git:github.com/HazAT/pi-autoresearch",
     "git:github.com/HazAT/pi-parallel",
-    "git:github.com/badlogic/pi-diff-review"
+    "git:github.com/badlogic/pi-diff-review",
+    "git:github.com/fluxgear/pi-thinking-steps",
+    "git:https://github.com/juanibiapina/pi-powerbar",
+    "git:https://github.com/robzolkos/pi-slopchop"
   ],
   "extensions": [
     "+extensions/cmux/index.ts"

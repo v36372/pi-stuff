@@ -1,9 +1,0 @@
-{
-  "members": [
-    "anthropic/claude-opus-4-6",
-    "github-copilot/gemini-3.1-pro-preview",
-    "openai-codex/gpt-5.4"
-  ],
-  "chairman": "anthropic/claude-opus-4-6",
-  "templates": {}
-}

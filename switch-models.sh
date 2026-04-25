@@ -6,7 +6,7 @@
 
 set -e
 
-AGENTS_DIR="${HOME}/.pi/agent/agents"
+AGENTS_DIR="${HOME}/.pi/agent/git/github.com/HazAT/pi-interactive-subagents/agents"
 
 # Show usage
 usage() {
