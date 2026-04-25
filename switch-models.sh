@@ -40,10 +40,8 @@ update_agent_model() {
 # Apply OpenAI profile
 apply_openai() {
     echo "Switching to OpenAI profile..."
-    update_agent_model "spec" "openai-codex-2/gpt-5.4"
     update_agent_model "planner" "openai-codex-2/gpt-5.4"
     update_agent_model "researcher" "openai-codex/gpt-5.4"
-    update_agent_model "autoresearch" "openai-codex/gpt-5.4"
     update_agent_model "scout" "openai-codex/gpt-5.3"
     update_agent_model "worker" "openai-codex-2/gpt-5.4"
     update_agent_model "reviewer" "openai-codex-2/gpt-5.4"
@@ -53,10 +51,8 @@ apply_openai() {
 # Apply OpenCode Go profile
 apply_opencode() {
     echo "Switching to OpenCode Go profile..."
-    update_agent_model "spec" "opencode-go/kimi-k2.5"
     update_agent_model "planner" "opencode-go/kimi-k2.5"
     update_agent_model "researcher" "opencode-go/kimi-k2.5"
-    update_agent_model "autoresearch" "opencode-go/glm-4.5-air"
     update_agent_model "scout" "opencode-go/glm-4.5-air"
     update_agent_model "worker" "opencode-go/glm-5.1"
     update_agent_model "reviewer" "opencode-go/kimi-k2.5"
@@ -66,10 +62,8 @@ apply_opencode() {
 # Apply GitHub Copilot profile
 apply_copilot() {
     echo "Switching to GitHub Copilot profile..."
-    update_agent_model "spec" "github-copilot/claude-sonnet-4.6"
     update_agent_model "planner" "github-copilot/claude-sonnet-4.6"
     update_agent_model "researcher" "github-copilot/claude-sonnet-4.6"
-    update_agent_model "autoresearch" "github-copilot/claude-haiku-4.5"
     update_agent_model "scout" "github-copilot/claude-haiku-4.5"
     update_agent_model "worker" "github-copilot/claude-sonnet-4.6"
     update_agent_model "reviewer" "github-copilot/claude-sonnet-4.6"
@@ -79,10 +73,8 @@ apply_copilot() {
 # Apply Mixed profile - best model for each role
 apply_mixed() {
     echo "Switching to Mixed profile..."
-    update_agent_model "spec" "openai-codex-2/gpt-5.4"
     update_agent_model "planner" "opencode/mimo-v2-pro"
     update_agent_model "researcher" "opencode/mimo-v2-omni"
-    update_agent_model "autoresearch" "openai/gpt-4.1"
     update_agent_model "scout" "github-copilot/claude-haiku-4.5"
     update_agent_model "worker" "zai/glm-5.1"
     update_agent_model "reviewer" "anthropic/claude-sonnet-4.6"
@@ -93,7 +85,7 @@ apply_mixed() {
 show_current() {
     echo "Current agent models:"
     echo "===================="
-    for agent in spec planner researcher autoresearch scout worker reviewer visual-tester; do
+    for agent in planner researcher scout worker reviewer visual-tester; do
         local file="${AGENTS_DIR}/${agent}.md"
         if [[ -f "$file" ]]; then
             local model
