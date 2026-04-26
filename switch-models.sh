@@ -1,12 +1,12 @@
 #!/bin/bash
 #
 # Switch agent model profiles for pi agents
-# Usage: ./switch-models.sh [openai|opencode|copilot|mixed|current]
+# Usage: ./switch-models.sh [openai|opencode|copilot|current]
 #
 
 set -e
 
-AGENTS_DIR="${HOME}/.pi/agent/git/github.com/HazAT/pi-interactive-subagents/agents"
+AGENTS_DIR="${HOME}/.pi/agent/gents"
 
 # Show usage
 usage() {
@@ -16,7 +16,6 @@ usage() {
     echo "  openai   - Use OpenAI models (gpt-5.4, gpt-4.1)"
     echo "  opencode - Use OpenCode Go models (mimo-v2-pro, mimo-v2-omni, minimax-m2.7)"
     echo "  copilot  - Use GitHub Copilot models (claude-sonnet-4.6, claude-haiku-4.5)"
-    echo "  mixed    - Mixed profile using best models for each role"
     echo "  current  - Show current model assignments"
     echo ""
 }
@@ -67,16 +66,6 @@ apply_copilot() {
     update_agent_model "visual-tester" "github-copilot/claude-sonnet-4.6"
 }
 
-# Apply Mixed profile - best model for each role
-apply_mixed() {
-    echo "Switching to Mixed profile..."
-    update_agent_model "planner" "opencode/mimo-v2-pro"
-    update_agent_model "scout" "github-copilot/claude-haiku-4.5"
-    update_agent_model "worker" "zai/glm-5.1"
-    update_agent_model "reviewer" "anthropic/claude-sonnet-4.6"
-    update_agent_model "visual-tester" "opencode/mimo-v2-omni"
-}
-
 # Show current models
 show_current() {
     echo "Current agent models:"
@@ -123,9 +112,6 @@ main() {
             ;;
         copilot)
             apply_copilot
-            ;;
-        mixed)
-            apply_mixed
             ;;
         *)
             echo "Error: Unknown profile '$profile'" >&2
