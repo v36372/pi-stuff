@@ -40,10 +40,10 @@ update_agent_model() {
 # Apply OpenAI profile
 apply_openai() {
     echo "Switching to OpenAI profile..."
-    update_agent_model "planner" "openai-codex-2/gpt-5.5"
+    update_agent_model "planner" "openai-codex/gpt-5.5"
     update_agent_model "scout" "openai-codex/gpt-5.3"
-    update_agent_model "worker" "openai-codex-2/gpt-5.5"
-    update_agent_model "reviewer" "openai-codex-2/gpt-5.5"
+    update_agent_model "worker" "openai-codex/gpt-5.5"
+    update_agent_model "reviewer" "openai-codex/gpt-5.5"
     update_agent_model "visual-tester" "openai-codex/gpt-5.5"
 }
 

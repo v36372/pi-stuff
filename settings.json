@@ -13,10 +13,8 @@
     "git:github.com/HazAT/pi-interactive-subagents",
     "-git:github.com/HazAT/pi-autoresearch",
     "git:github.com/HazAT/pi-parallel",
-    "git:github.com/badlogic/pi-diff-review",
     "git:github.com/fluxgear/pi-thinking-steps",
-    "git:https://github.com/juanibiapina/pi-powerbar",
-    "git:https://github.com/robzolkos/pi-slopchop"
+    "git:github.com/robzolkos/pi-slopchop"
   ],
   "extensions": [
     "+extensions/cmux/index.ts"
