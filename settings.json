@@ -3,7 +3,7 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "low",
   "theme": "tokyo-moon",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",

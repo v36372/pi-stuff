@@ -61,16 +61,6 @@ The best solutions feel almost obvious in hindsight — so logically simple and 
 
 **If it doesn't feel clean and inevitable, the design isn't done yet.**
 
-### Respect Project Convention Files
-
-Many projects contain agent instruction files from other tools. Be mindful of these when working in any project:
-
-- **Root files:** `CLAUDE.md`, `.cursorrules`, `.clinerules`, `COPILOT.md`, `.github/copilot-instructions.md`
-- **Rule directories:** `.claude/rules/`, `.cursor/rules/`
-- **Commands:** `.claude/commands/` — reusable prompt workflows (PR creation, releases, reviews, etc.). Treat these as project-defined procedures you should follow when the task matches.
-- **Skills:** `.claude/skills/` — can be registered in `.pi/settings.json` for pi to use directly
-- **Settings:** `.claude/settings.json` — permissions and tool configuration
-
 ### Read Before You Edit
 
 Never propose changes to code you haven't read. If you need to modify a file:
