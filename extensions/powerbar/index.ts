@@ -5,7 +5,7 @@
  * Other extensions can emit `powerbar:update` to add segments.
  */
 
-import { SettingsManager, type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { RateWindow, SubCoreAllState, SubCoreState, UsageSnapshot } from "@marckrenn/pi-sub-shared";
@@ -27,8 +27,6 @@ const ROWS = [
 ] as const;
 const SEPARATOR = " │ ";
 const PLACEMENT: "aboveEditor" | "belowEditor" = "belowEditor";
-const BAR_STYLE: "continuous" | "blocks" = "blocks";
-const BAR_WIDTH = 10;
 
 // ─── Types ───
 
@@ -38,8 +36,6 @@ interface Segment {
 	suffix?: string;
 	icon?: string;
 	color?: string;
-	bar?: number;
-	barSegments?: number;
 }
 
 interface PowerbarUpdatePayload {
@@ -48,8 +44,6 @@ interface PowerbarUpdatePayload {
 	suffix?: string;
 	icon?: string;
 	color?: string;
-	bar?: number;
-	barSegments?: number;
 }
 
 interface SegmentRegistration {
@@ -58,51 +52,6 @@ interface SegmentRegistration {
 }
 
 // ─── Rendering ───
-
-function renderProgressBar(percent: number, width: number, theme: Theme, color: string): string {
-	const clamped = Math.max(0, Math.min(100, percent));
-	const filledFloat = (clamped / 100) * width;
-	const filledFull = Math.floor(filledFloat);
-	const remainder = filledFloat - filledFull;
-	const levels = ["▏", "▎", "▍", "▌", "▋", "▊", "▉"];
-	const themeColor = color as ThemeColor;
-	const filledStr = "█".repeat(filledFull);
-
-	let partial = "";
-	let emptyCount = width - filledFull;
-
-	if (remainder >= 0.0625 && filledFull < width) {
-		const levelIndex = Math.max(0, Math.min(levels.length - 1, Math.round(remainder * 8) - 1));
-		partial = levels[levelIndex];
-		emptyCount = Math.max(0, emptyCount - 1);
-	}
-
-	const emptyStr = " ".repeat(emptyCount);
-	return theme.fg(themeColor, filledStr + partial) + emptyStr;
-}
-
-function fgToBgAnsi(fgAnsi: string): string {
-	return fgAnsi.replace("\x1b[38;", "\x1b[48;");
-}
-
-function renderBlocksBar(percent: number, segments: number, theme: Theme, color: string): string {
-	const glyphs = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-	const dimBg = fgToBgAnsi(theme.getFgAnsi("dim"));
-	const fgColor = theme.getFgAnsi((color || "muted") as ThemeColor);
-	const reset = "\x1b[39m\x1b[49m";
-	const clamped = Math.max(0, Math.min(100, percent));
-	const filledFloat = (clamped / 100) * segments;
-
-	const result: string[] = [];
-	for (let i = 0; i < segments; i++) {
-		const blockFill = Math.max(0, Math.min(1, filledFloat - i));
-		const level = Math.round(blockFill * 8);
-		const glyph = glyphs[level];
-		result.push(level > 0 ? `${dimBg}${fgColor}${glyph}${reset}` : `${dimBg}${glyph}${reset}`);
-	}
-
-	return result.join(" ");
-}
 
 function renderSegmentText(segment: Segment, theme: Theme): string {
 	const parts: string[] = [];
@@ -113,15 +62,6 @@ function renderSegmentText(segment: Segment, theme: Theme): string {
 	}
 	if (segment.text) {
 		parts.push(theme.fg(themeColor, segment.text));
-	}
-	if (segment.bar !== undefined) {
-		const color = segment.color || "muted";
-		if (BAR_STYLE === "blocks") {
-			const blockCount = segment.barSegments ?? BAR_WIDTH;
-			parts.push(renderBlocksBar(segment.bar, blockCount, theme, color));
-		} else {
-			parts.push(renderProgressBar(segment.bar, BAR_WIDTH, theme, color));
-		}
 	}
 	if (segment.suffix) {
 		parts.push(theme.fg(themeColor, segment.suffix));
@@ -139,7 +79,7 @@ function renderSideSegments(ids: string[], segments: Map<string, Segment>, theme
 	const rendered: RenderedSegment[] = [];
 	for (const id of ids) {
 		const seg = segments.get(id);
-		if (!seg || (!seg.text && !seg.suffix && seg.bar === undefined)) continue;
+		if (!seg || (!seg.text && !seg.suffix && !seg.icon)) continue;
 		const text = renderSegmentText(seg, theme);
 		rendered.push({ text, width: visibleWidth(text) });
 	}
@@ -169,38 +109,69 @@ function shrinkWidest(segments: RenderedSegment[], overflow: number): void {
 	};
 }
 
-function renderBar(segments: Map<string, Segment>, theme: Theme, width: number, leftIds: readonly string[], rightIds: readonly string[]): string {
-	const separator = theme.fg("dim", SEPARATOR);
-	const separatorWidth = visibleWidth(separator);
+function padRight(segment: RenderedSegment, width: number): RenderedSegment {
+	const padding = Math.max(0, width - segment.width);
+	return { text: segment.text + " ".repeat(padding), width: segment.width + padding };
+}
 
-	const leftSegs = renderSideSegments([...leftIds], segments, theme);
-	const rightSegs = renderSideSegments([...rightIds], segments, theme);
-	const allSegs = [...leftSegs, ...rightSegs];
-
-	const leftSepCount = Math.max(0, leftSegs.length - 1);
-	const rightSepCount = Math.max(0, rightSegs.length - 1);
-	const totalSepWidth = (leftSepCount + rightSepCount) * separatorWidth;
-	const totalSegWidth = allSegs.reduce((sum, s) => sum + s.width, 0);
-	const minPadding = 1;
-	const totalNeeded = totalSegWidth + totalSepWidth + minPadding;
-
-	if (totalNeeded > width) {
-		let overflow = totalNeeded - width;
-		const maxPasses = allSegs.length;
-		for (let i = 0; i < maxPasses && overflow > 0; i++) {
-			shrinkWidest(allSegs, overflow);
-			const newSegWidth = allSegs.reduce((sum, s) => sum + s.width, 0);
-			overflow = newSegWidth + totalSepWidth + minPadding - width;
+function columnWidths(rows: RenderedSegment[][]): number[] {
+	const widths: number[] = [];
+	for (const row of rows) {
+		for (let i = 0; i < row.length; i++) {
+			widths[i] = Math.max(widths[i] ?? 0, row[i].width);
 		}
 	}
+	return widths;
+}
 
-	const left = joinSegments(allSegs.slice(0, leftSegs.length), separator, separatorWidth);
-	const right = joinSegments(allSegs.slice(leftSegs.length), separator, separatorWidth);
+function joinAlignedSegments(segments: RenderedSegment[], widths: number[], separator: string, separatorWidth: number): RenderedSegment {
+	const padded = segments.map((segment, index) => (index < segments.length - 1 ? padRight(segment, widths[index] ?? segment.width) : segment));
+	return joinSegments(padded, separator, separatorWidth);
+}
 
-	const padding = Math.max(minPadding, width - left.width - right.width);
-	const line = `${left.text}${" ".repeat(padding)}${right.text}`;
+function renderBars(segments: Map<string, Segment>, theme: Theme, width: number): string[] {
+	const separator = theme.fg("dim", SEPARATOR);
+	const separatorWidth = visibleWidth(separator);
+	const minPadding = 1;
+	const rows = ROWS.map((row) => ({
+		left: renderSideSegments([...row.left], segments, theme),
+		right: renderSideSegments([...row.right], segments, theme),
+	}));
+	const leftWidths = columnWidths(rows.map((row) => row.left));
+	const rightWidths = columnWidths(rows.map((row) => row.right));
+	const maxRightWidth = Math.max(
+		0,
+		...rows.map((row) => joinAlignedSegments(row.right, rightWidths, separator, separatorWidth).width),
+	);
 
-	return truncateToWidth(line, width, "…");
+	return rows.map((row) => {
+		const allSegs = [...row.left, ...row.right];
+		const leftSepCount = Math.max(0, row.left.length - 1);
+		const rightSepCount = Math.max(0, row.right.length - 1);
+		const totalSepWidth = (leftSepCount + rightSepCount) * separatorWidth;
+		let left = joinAlignedSegments(row.left, leftWidths, separator, separatorWidth);
+		let right = joinAlignedSegments(row.right, rightWidths, separator, separatorWidth);
+		let totalNeeded = left.width + Math.max(right.width, maxRightWidth) + minPadding;
+
+		if (totalNeeded > width) {
+			let overflow = totalNeeded - width;
+			const maxPasses = allSegs.length;
+			for (let i = 0; i < maxPasses && overflow > 0; i++) {
+				shrinkWidest(allSegs, overflow);
+				const newSegWidth = allSegs.reduce((sum, s) => sum + s.width, 0);
+				overflow = newSegWidth + totalSepWidth + minPadding - width;
+			}
+			left = joinSegments(allSegs.slice(0, row.left.length), separator, separatorWidth);
+			right = joinSegments(allSegs.slice(row.left.length), separator, separatorWidth);
+			totalNeeded = left.width + right.width + minPadding;
+		}
+
+		const rightOffset = Math.max(0, maxRightWidth - right.width);
+		const padding = Math.max(minPadding, width - left.width - right.width - rightOffset);
+		const line = `${left.text}${" ".repeat(padding)}${right.text}${" ".repeat(rightOffset)}`;
+
+		return truncateToWidth(line, width, "…");
+	});
 }
 
 // ─── Segment helpers ───
@@ -304,8 +275,6 @@ function emitTokens(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 // ─── Context segment ───
 
-const CHUNK_SIZE = 100_000;
-
 function contextColor(pct: number): string {
 	if (pct > 80) return "error";
 	if (pct > 60) return "warning";
@@ -318,12 +287,6 @@ function formatCompactNumber(count: number): string {
 	return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-function getCompactionLabel(ctx: ExtensionContext): string {
-	const settings = SettingsManager.create(ctx.cwd).getCompactionSettings();
-	const mode = settings.enabled ? "auto" : "manual";
-	return `${mode} r${formatCompactNumber(settings.reserveTokens)} k${formatCompactNumber(settings.keepRecentTokens)}`;
-}
-
 function emitContextUsage(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const usage = ctx.getContextUsage();
 	if (usage && usage.tokens != null) {
@@ -333,9 +296,7 @@ function emitContextUsage(pi: ExtensionAPI, ctx: ExtensionContext): void {
 		emitUpdate(pi, {
 			id: "context-usage",
 			text: "",
-			suffix: `${pctText}%/${contextWindow} ${getCompactionLabel(ctx)}`,
-			bar: pct,
-			barSegments: Math.ceil(usage.contextWindow / CHUNK_SIZE),
+			suffix: `${pctText}%/${contextWindow}`,
 			color: contextColor(pct),
 		});
 	}
@@ -474,7 +435,7 @@ function subColor(pct: number): string {
 	return "muted";
 }
 
-function emitSubWindow(pi: ExtensionAPI, segmentId: string, window: RateWindow | undefined, barSegments: number): void {
+function emitSubWindow(pi: ExtensionAPI, segmentId: string, window: RateWindow | undefined): void {
 	if (!window) {
 		emitRemove(pi, segmentId);
 		return;
@@ -489,8 +450,6 @@ function emitSubWindow(pi: ExtensionAPI, segmentId: string, window: RateWindow |
 		id: segmentId,
 		text: textParts.join(" "),
 		suffix: `${pct}%`,
-		bar: pct,
-		barSegments,
 		color: subColor(pct),
 	});
 }
@@ -501,15 +460,17 @@ function emitSubUsage(pi: ExtensionAPI, usage: UsageSnapshot | undefined): void 
 		emitRemove(pi, "sub-weekly");
 		return;
 	}
-	emitSubWindow(pi, "sub-hourly", usage.windows[0], 5);
-	emitSubWindow(pi, "sub-weekly", usage.windows[1], 7);
+	emitSubWindow(pi, "sub-hourly", usage.windows[0]);
+	emitSubWindow(pi, "sub-weekly", usage.windows[1]);
 }
 
 // ─── Main extension ───
 
 export default function createExtension(pi: ExtensionAPI): void {
 	const segments: Map<string, Segment> = new Map();
-	let currentCtx: { ui: { setWidget: (...args: any[]) => void; setFooter: (...args: any[]) => void }; hasUI: boolean } | undefined;
+	let currentCtx: ExtensionContext | undefined;
+	let modelState: string | undefined;
+	let modelStateTimer: ReturnType<typeof setInterval> | undefined;
 
 	function refresh(): void {
 		if (!currentCtx?.hasUI) return;
@@ -518,7 +479,7 @@ export default function createExtension(pi: ExtensionAPI): void {
 			(_tui: TUI, theme: Theme): Component & { dispose?(): void } => {
 				return {
 					render(width: number): string[] {
-						return ROWS.map((row) => renderBar(segments, theme, width, row.left, row.right));
+						return renderBars(segments, theme, width);
 					},
 					invalidate(): void {},
 				};
@@ -532,7 +493,7 @@ export default function createExtension(pi: ExtensionAPI): void {
 		const payload = data as PowerbarUpdatePayload;
 		if (!payload?.id) return;
 
-		if (!payload.text && payload.bar === undefined) {
+		if (!payload.text && !payload.suffix && !payload.icon) {
 			segments.delete(payload.id);
 		} else {
 			segments.set(payload.id, {
@@ -541,8 +502,6 @@ export default function createExtension(pi: ExtensionAPI): void {
 				suffix: payload.suffix,
 				icon: payload.icon,
 				color: payload.color,
-				bar: payload.bar,
-				barSegments: payload.barSegments,
 			});
 		}
 		refresh();
@@ -556,7 +515,7 @@ export default function createExtension(pi: ExtensionAPI): void {
 		void label;
 	});
 
-	function hideFooter(ctx: { ui: { setFooter: (...args: any[]) => void }; hasUI: boolean }): void {
+	function hideFooter(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		ctx.ui.setFooter((_tui, _theme, _footerData) => ({
 			render(): string[] {
@@ -566,13 +525,42 @@ export default function createExtension(pi: ExtensionAPI): void {
 		}));
 	}
 
+	function getModelState(ctx: ExtensionContext): string {
+		const model = ctx.model;
+		return `${model?.provider ?? ""}:${model?.id ?? ""}:${pi.getThinkingLevel()}`;
+	}
+
+	function syncModelState(ctx: ExtensionContext): void {
+		const nextState = getModelState(ctx);
+		if (nextState === modelState) return;
+		modelState = nextState;
+		emitProvider(pi, ctx);
+		emitModel(pi, ctx);
+		emitMultiPassPool(pi, ctx);
+	}
+
+	function startModelStateWatcher(ctx: ExtensionContext): void {
+		if (modelStateTimer) clearInterval(modelStateTimer);
+		modelState = undefined;
+		syncModelState(ctx);
+		modelStateTimer = setInterval(() => {
+			if (currentCtx) syncModelState(currentCtx);
+		}, 250);
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
 		hideFooter(ctx);
+		startModelStateWatcher(ctx);
 		refresh();
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		if (modelStateTimer) {
+			clearInterval(modelStateTimer);
+			modelStateTimer = undefined;
+		}
+		modelState = undefined;
 		if (ctx.hasUI) {
 			ctx.ui.setWidget("powerbar", undefined);
 		}

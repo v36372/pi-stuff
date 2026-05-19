@@ -1,25 +1,21 @@
 {
-  "lastChangelogVersion": "0.70.2",
+  "lastChangelogVersion": "0.74.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "low",
+  "defaultThinkingLevel": "xhigh",
   "theme": "tokyo-moon",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
     "git:github.com/MasuRii/pi-tool-display",
-    "git:github.com/HazAT/pi-smart-sessions",
     "git:github.com/pasky/chrome-cdp-skill",
-    "git:github.com/HazAT/pi-interactive-subagents",
-    "-git:github.com/HazAT/pi-autoresearch",
     "git:github.com/HazAT/pi-parallel",
-    "git:github.com/fluxgear/pi-thinking-steps",
-    "git:github.com/robzolkos/pi-slopchop"
-  ],
-  "extensions": [
-    "+extensions/cmux/index.ts"
   ],
   "collapseChangelog": true,
+  "enabledModels": [
+    "anthropic/claude-opus-4-7",
+    "openai-codex/gpt-5.5"
+  ],
   "quietStartup": true,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
