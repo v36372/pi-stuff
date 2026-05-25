@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Solo-native planning workflow. Use when asked to "plan", "brainstorm", "design", "create a plan", "I want to build", or "let's build". Runs a scout, opens an interactive planner, creates Solo todos, then executes and reviews through Solo subagents and scratchpads.
+description: Solo-native planning workflow. Use when asked to "plan", "brainstorm", "design", "create a plan", "I want to build", or "let's build". Runs a scout, opens a planner that is interactive through approach selection, creates Solo todos, then automatically executes and reviews through Solo subagents and scratchpads.
 ---
 
 # Plan
@@ -14,9 +14,8 @@ Run a Solo-native planning workflow. Use Solo subagents, Solo scratchpads, and S
 3. Read the scout scratchpad.
 4. Spawn an interactive Solo planner with the scout context.
 5. When the planner has produced a plan, read the planner scratchpad and list the generated Solo todos.
-6. Ask the user whether to execute.
-7. Execute todos sequentially with Solo workers.
-8. Run a Solo reviewer and triage findings.
+6. Start executing todos sequentially with Solo workers without asking for additional confirmation.
+7. Run a Solo reviewer and triage findings.
 
 Solo subagents are asynchronous. After every `subagent` call, stop and wait for Solo to inject the wake-up turn. Do not poll, guess, or fabricate child results.
 
@@ -76,28 +75,28 @@ Scout scratchpad: <scratchpad name/id>
 Scout findings:
 <paste concise scout findings or provide the scratchpad id>
 
-Work interactively with the user in your Solo pane. Save the final plan to your pre-created Solo scratchpad, create Solo todos tagged: <tag>, and notify the parent when the todos are ready.`
+Work interactively with the user through the Phase 5 approach checkpoint only. After that, finish validation, premortem, final plan writing, and todo creation autonomously with no further user prompts. Save the final plan to your pre-created Solo scratchpad, create Solo todos tagged: <tag>, and notify the parent when the todos are ready.`
 })
 ```
 
-Tell the user to continue the planning conversation in the planner pane. The first interactive wake-up only means the planner is waiting for the user; do not treat it as completion unless the planner scratchpad contains a final plan and the todos exist. When the planner later notifies the parent that todos are ready, read the planner scratchpad and list the tagged todos.
+Tell the user to continue the planning conversation in the planner pane through the Phase 5 approach checkpoint. Explain that after that answer the planner will finish the plan and todos autonomously, return control to the parent, and the parent will start workers automatically. The first interactive wake-up only means the planner is waiting for the user; do not treat it as completion unless the planner scratchpad contains a final plan and the todos exist. When the planner later notifies the parent that todos are ready, read the planner scratchpad, list the tagged todos, and start execution automatically.
 
-## Phase 4: Review Plan and Todos
+## Phase 4: Review Plan and Todos, Then Auto-Start
 
 When the planner finishes:
 
 1. Read the plan scratchpad with `scratchpad_read`.
 2. List todos with `todo_list({ tags: ["<tag>"], completed: false })`.
 3. Summarize the plan, todo count, effort level, and key decisions.
-4. Ask: “Ready to execute these todos sequentially?”
+4. Proceed immediately to Phase 5 execution.
 
-Do not execute until the user confirms.
+Do not ask the user whether to execute after the planner returns. The planner completion handoff is the signal to start workers. If the planner scratchpad or todos are missing, stop and investigate instead of executing.
 
 ## Progress Notifications
 
 During execution, the parent/orchestrator should send human-facing progress notifications. Do not add notification work to worker or reviewer prompts.
 
-Use Solo terminal notifications because Pi's own tool output does not trigger Solo's notification path. After the user confirms execution, create one disposable notification terminal and keep its process id for the run:
+Use Solo terminal notifications because Pi's own tool output does not trigger Solo's notification path. Before automatic execution starts, create one disposable notification terminal and keep its process id for the run:
 
 ```typescript
 solo_tool({
@@ -145,6 +144,8 @@ solo_tool({
 ```
 
 ## Phase 5: Execute Todos
+
+Start this phase immediately after the planner final artifacts are confirmed. Do not wait for further user input.
 
 Run workers one todo at a time. Parallel workers in one git repo will conflict.
 
@@ -203,6 +204,7 @@ Before reporting completion:
 - [ ] Scout scratchpad was read and passed to planner.
 - [ ] Planner scratchpad contains the final plan.
 - [ ] Todos are Solo todos tagged with the plan tag.
+- [ ] Parent auto-started workers after planner completion without asking for execute confirmation.
 - [ ] Workers ran sequentially.
 - [ ] Each completed worker saved a Solo scratchpad artifact.
 - [ ] Progress notifications were sent by the parent/orchestrator when the notification terminal was available.
