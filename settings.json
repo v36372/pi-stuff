@@ -1,9 +1,9 @@
 {
-  "lastChangelogVersion": "0.75.3",
+  "lastChangelogVersion": "0.78.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "low",
+  "defaultThinkingLevel": "high",
   "theme": "solo",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
