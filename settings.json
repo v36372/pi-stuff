@@ -4,7 +4,7 @@
   "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
-  "theme": "solo",
+  "theme": "modern-dark",
   "packages": [
     "git:github.com/hjanuschka/pi-multi-pass",
     "git:github.com/MasuRii/pi-tool-display",

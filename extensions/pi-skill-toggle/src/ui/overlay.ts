@@ -36,11 +36,6 @@ class SkillToggleOverlay {
 
   handleInput(data: string): void {
     if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-      this.done({ action: "cancel", drafts: this.getDrafts() });
-      return;
-    }
-
-    if (matchesKey(data, Key.ctrl("s"))) {
       this.done({ action: "apply", drafts: this.getDrafts() });
       return;
     }
@@ -98,8 +93,8 @@ class SkillToggleOverlay {
     ).map((line) => frameLine(this.theme, line, innerWidth));
 
     const footer = [
-      frameLine(this.theme, this.theme.fg("dim", "type search • ↑↓ move • space toggle • ctrl+s apply + reload"), innerWidth),
-      frameLine(this.theme, this.theme.fg("dim", "esc cancel"), innerWidth),
+      frameLine(this.theme, this.theme.fg("dim", "type search • ↑↓ move • space toggle"), innerWidth),
+      frameLine(this.theme, this.theme.fg("dim", "esc/ctrl+c apply + reload"), innerWidth),
     ];
 
     return [
