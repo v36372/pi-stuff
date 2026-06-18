@@ -1,16 +1,18 @@
 {
   "lastChangelogVersion": "0.79.6",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "glm-5.2",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "packages": [
     "git:github.com/pasky/chrome-cdp-skill"
   ],
   "collapseChangelog": true,
   "enabledModels": [
-    "openai-codex/gpt-5.5"
+    "openai-codex/gpt-5.5",
+    "opencode-go/kimi-k2.7",
+    "opencode-go/glm-5.2"
   ],
   "quietStartup": true,
   "doubleEscapeAction": "tree",
