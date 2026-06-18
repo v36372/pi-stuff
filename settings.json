@@ -1,20 +1,16 @@
 {
-  "lastChangelogVersion": "0.78.0",
+  "lastChangelogVersion": "0.79.6",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "packages": [
-    "git:github.com/hjanuschka/pi-multi-pass",
-    "git:github.com/MasuRii/pi-tool-display",
     "git:github.com/pasky/chrome-cdp-skill",
-    "git:github.com/HazAT/pi-parallel",
-    "git:github.com/HazAT/pi-solo"
+    "git:github.com/HazAT/pi-parallel"
   ],
   "collapseChangelog": true,
   "enabledModels": [
-    "opencode-go/kimi-k2.6",
     "openai-codex/gpt-5.5"
   ],
   "quietStartup": true,
