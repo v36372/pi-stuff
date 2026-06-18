@@ -3,11 +3,10 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "theme": "modern-dark",
   "packages": [
-    "git:github.com/pasky/chrome-cdp-skill",
-    "git:github.com/HazAT/pi-parallel"
+    "git:github.com/pasky/chrome-cdp-skill"
   ],
   "collapseChangelog": true,
   "enabledModels": [
