@@ -10,4 +10,19 @@ Ask the questions one at a time, waiting for feedback on each question before co
 
 If a question can be answered by exploring the codebase, explore the codebase instead.
 
-At the end of every turn where you pose a new grilling question, you MUST use the `execute_command` tool to run `/answer`. This hands the turn back to the user so they can respond to the question. Do not end the turn any other way when a new question is on the table.
+At the end of every turn where you pose a new grilling question, you MUST call the `ask_user` tool with the question already structured for the answer UI. Do not use `/answer` or `execute_command` for grilling questions.
+
+Call `ask_user` with exactly this shape:
+
+```json
+{
+  "questions": [
+    {
+      "question": "The single grilling question the user should answer.",
+      "context": "Optional short context containing your recommendation, relevant tradeoffs, and any constraints needed to answer without rereading the transcript."
+    }
+  ]
+}
+```
+
+The `context` field is optional, but include it when your recommendation or the decision context affects the answer. This hands the turn back to the user so they can respond to the question. Do not end the turn any other way when a new question is on the table.

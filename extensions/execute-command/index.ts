@@ -9,20 +9,19 @@ export default function (pi: ExtensionAPI) {
     name: "execute_command",
     label: "Execute Command",
     description: `Execute a slash command or send a message as if the user typed it. The message is added to the session history and triggers a new turn. Use this to:
-- Self-invoke /answer after asking multiple questions
 - Run /reload after creating skills
-- Execute any slash command programmatically
+- Execute slash commands programmatically when no dedicated tool exists
 - Send follow-up prompts to yourself
 
 The command/message appears in the conversation as a user message.`,
     promptSnippet:
       "Execute a slash command or send a message as if the user typed it. " +
-      "Use to self-invoke /answer after asking questions, run /reload after creating skills, or send follow-up prompts.",
+      "Use to run /reload after creating skills, execute slash commands when no dedicated tool exists, or send follow-up prompts.",
 
     parameters: Type.Object({
       command: Type.String({
         description:
-          "The command or message to execute (e.g., '/answer', '/reload', or any text)",
+          "The command or message to execute (e.g., '/reload' or any text)",
       }),
       reason: Type.Optional(
         Type.String({
@@ -36,14 +35,14 @@ The command/message appears in the conversation as a user message.`,
       const { command, reason } = params;
       const trimmed = command.trim();
 
-      // /answer — fire-and-forget via event bus (works immediately)
+      // /answer — queue via event bus so answer.ts can run after this turn completes.
       if (trimmed === "/answer") {
         pi.events.emit("trigger:answer", ctx);
         return {
           content: [
             {
               type: "text",
-              text: reason ? `Triggered /answer.\nReason: ${reason}` : "Triggered /answer.",
+              text: reason ? `Queued /answer for turn end.\nReason: ${reason}` : "Queued /answer for turn end.",
             },
           ],
           details: { command: trimmed, reason, mechanism: "event" },

@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.80.2",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
+  "defaultProvider": "zai",
+  "defaultModel": "glm-5.2",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",

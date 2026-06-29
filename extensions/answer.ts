@@ -1,4 +1,5 @@
 import { complete, type Api, type Model, type UserMessage } from "@earendil-works/pi-ai";
+import { Type } from "@sinclair/typebox";
 import {
   BorderedLoader,
   Theme,
@@ -464,6 +465,38 @@ class AnswerComponent implements Component, Focusable {
 }
 
 export default function (pi: ExtensionAPI) {
+  let pendingQuestions: ExtractedQuestion[] = [];
+  let pendingExtraction = false;
+
+  const presentQuestions = async (ctx: ExtensionContext, questions: ExtractedQuestion[]) => {
+    if (!ctx.hasUI) {
+      ctx.ui.notify("answer requires interactive mode", "error");
+      return;
+    }
+
+    const normalized = normalizeExtractedQuestions({ questions }).questions;
+    if (normalized.length === 0) {
+      ctx.ui.notify("No questions provided", "error");
+      return;
+    }
+
+    const answersResult = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+      return new AnswerComponent(normalized, tui, theme, done);
+    });
+
+    if (answersResult === null) {
+      ctx.ui.notify("Cancelled", "info");
+      return;
+    }
+
+    if (ctx.isIdle()) {
+      pi.sendUserMessage(answersResult);
+    } else {
+      pi.sendUserMessage(answersResult, { deliverAs: "followUp" });
+      ctx.ui.notify("Answers queued as a follow-up message", "info");
+    }
+  };
+
   const answerHandler = async (ctx: ExtensionContext) => {
     if (!ctx.hasUI) {
       ctx.ui.notify("answer requires interactive mode", "error");
@@ -587,34 +620,69 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const answersResult = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-      return new AnswerComponent(extractionOutcome.result.questions, tui, theme, done);
-    });
+    await presentQuestions(ctx, extractionOutcome.result.questions);
+  };
 
-    if (answersResult === null) {
-      ctx.ui.notify("Cancelled", "info");
+  pi.registerTool({
+    name: "ask_user",
+    label: "Ask User",
+    description: "Ask the user one or more explicit questions using the interactive answer UI. Use only when the answer cannot be determined from available context or code inspection.",
+    promptSnippet: "Ask the user one or more explicit questions using the interactive answer UI when the answer cannot be determined from available context or code inspection.",
+    parameters: Type.Object({
+      questions: Type.Array(
+        Type.Object({
+          question: Type.String({ description: "Question text the user should answer." }),
+          context: Type.Optional(Type.String({ description: "Optional answer-relevant context." })),
+        }),
+        { minItems: 1 },
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const normalized = normalizeExtractedQuestions({ questions: params.questions }).questions;
+      if (normalized.length === 0) {
+        throw new Error("ask_user requires at least one non-empty question.");
+      }
+
+      pendingQuestions.push(...normalized);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Queued answer UI for ${normalized.length} question${normalized.length === 1 ? "" : "s"} at turn end.`,
+          },
+        ],
+        details: { questions: normalized },
+        terminate: true,
+      };
+    },
+  });
+
+  pi.events.on("trigger:answer", () => {
+    pendingExtraction = true;
+  });
+
+  pi.on("agent_end", async (_event, ctx) => {
+    if (pendingQuestions.length > 0) {
+      const questions = pendingQuestions;
+      pendingQuestions = [];
+      pendingExtraction = false;
+      await presentQuestions(ctx, questions);
       return;
     }
 
-    if (ctx.isIdle()) {
-      pi.sendUserMessage(answersResult);
-    } else {
-      pi.sendUserMessage(answersResult, { deliverAs: "followUp" });
-      ctx.ui.notify("Answers queued as a follow-up message", "info");
+    if (pendingExtraction) {
+      pendingExtraction = false;
+      await answerHandler(ctx);
     }
-  };
+  });
 
   pi.registerCommand("answer", {
     description: "Extract questions from the last completed assistant message into an interactive Q&A",
     handler: async (_args, ctx) => answerHandler(ctx),
   });
 
-
-
   pi.registerShortcut("ctrl+.", {
     description: "Extract and answer questions",
     handler: answerHandler,
   });
-
-
 }

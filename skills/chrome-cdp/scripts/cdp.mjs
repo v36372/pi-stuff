@@ -793,9 +793,21 @@ async function main() {
     const cdp = new CDP();
     await cdp.connect(getWsUrl());
     const pages = await getPages(cdp);
-    cdp.close();
     writeFileSync(PAGES_CACHE, JSON.stringify(pages), { mode: 0o600 });
-    console.log(formatPageList(pages));
+    if (pages.length === 0) {
+      // Distinguish "connected but no debuggable tabs" from a real failure,
+      // so callers don't mistake an empty list for a broken connection.
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      const internal = targetInfos.filter(t => t.type === 'page' && t.url.startsWith('chrome://'));
+      const reason = internal.length
+        ? `all ${internal.length} open page(s) are internal chrome:// URLs, which are excluded from debugging.`
+        : 'no page tabs are open.';
+      console.log(`No debuggable tabs found (connected to Chrome OK, but ${reason})`);
+      console.log('Open a regular http(s):// page, or run:  cdp open <url>');
+    } else {
+      console.log(formatPageList(pages));
+    }
+    cdp.close();
     setTimeout(() => process.exit(0), 100);
     return;
   }
