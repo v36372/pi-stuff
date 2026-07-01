@@ -1,16 +1,12 @@
 {
   "lastChangelogVersion": "0.80.2",
-  "defaultProvider": "opencode-go",
-  "defaultModel": "glm-5",
+  "defaultProvider": "zai",
+  "defaultModel": "glm-5.2",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "collapseChangelog": true,
-  "enabledModels": [
-    "openai-codex/gpt-5.5",
-    "opencode-go/kimi-k2.7",
-    "opencode-go/glm-5.2"
-  ],
+  "enabledModels": [],
   "quietStartup": true,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
