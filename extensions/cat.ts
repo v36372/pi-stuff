@@ -5,10 +5,16 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 const RUNCAT_INDICATOR: WorkingIndicatorOptions = {
-  // These are Unicode Private Use Area code points from the RunCat icon font:
-  // U+E900 U+E901 U+E902 U+E903 U+E904. They render as animation frames when the correct FONT is loaded.
-  frames: [" ", " ", " ", " ", " "],
-  intervalMs: 167,
+  // RunCat icon font Private Use Area glyphs:
+  // U+E900..U+E904 = cat running right
+  // U+E905..U+E909 = cat running left (horizontally mirrored)
+  // Each frame is padded to a 5-cell window; the cat physically runs from
+  // one side to the other, turns around, and runs back like a spinner.
+  frames: [
+    "    ", "    ", "    ", "    ", "    ",
+    "    ", "    ", "    ", "    ", "    ",
+  ],
+  intervalMs: 120,
 };
 function applyRunCatIndicator(ctx: ExtensionContext) {
   if (!ctx.hasUI) return;

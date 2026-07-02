@@ -2,12 +2,13 @@ import { open } from 'glimpseui';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
 import { readFileSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getCompanionSocketPath, usesNamedPipe } from './socket-path.mjs';
 
 const SOCK = getCompanionSocketPath();
-const RUNCAT_FONT_DATA_URL = `data:font/truetype;base64,${readFileSync(join(homedir(), 'Library', 'Fonts', 'runcat.ttf')).toString('base64')}`;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const RUNCAT_FONT_DATA_URL = `data:font/truetype;base64,${readFileSync(join(__dirname, 'cat.ttf')).toString('base64')}`;
 
 // ── status config ─────────────────────────────────────────────────────────────
 

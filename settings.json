@@ -1,14 +1,21 @@
 {
-  "lastChangelogVersion": "0.80.2",
-  "defaultProvider": "zai",
-  "defaultModel": "glm-5.2",
-  "hideThinkingBlock": false,
+  "lastChangelogVersion": "0.80.3",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k2.7-code",
+  "hideThinkingBlock": true,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "collapseChangelog": true,
-  "enabledModels": [],
+  "enabledModels": [
+    "openai-codex/gpt-5.5",
+    "opencode-go/glm-5.2",
+    "opencode-go/kimi-k2.7-code"
+  ],
   "quietStartup": true,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
-  "enableInstallTelemetry": false
+  "enableInstallTelemetry": false,
+  "packages": [
+    "https://github.com/nicobailon/pi-mcp-adapter"
+  ]
 }
