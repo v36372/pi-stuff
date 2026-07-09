@@ -22,7 +22,7 @@ const ROWS = [
 	},
 	{
 		left: ["tokens", "context-usage"],
-		right: ["sub-hourly", "sub-weekly"],
+		right: ["litellm-budget", "sub-hourly", "sub-weekly"],
 	},
 ] as const;
 const SEPARATOR = " │ ";
@@ -49,6 +49,71 @@ interface PowerbarUpdatePayload {
 interface SegmentRegistration {
 	id: string;
 	label: string;
+}
+
+interface ModelsConfig {
+	providers?: Record<string, { name?: string }>;
+}
+
+interface LiteLLMBudgetConfig {
+	baseUrl: string;
+	provider: string;
+	authModel: string;
+	userId?: string;
+	timezoneMinutes: number;
+	lookbackDays: number;
+	refreshIntervalMs: number;
+	dailyBudgetUsd?: number;
+	windowBudgetUsd?: number;
+}
+
+interface LiteLLMActivityMetrics {
+	spend?: number;
+	total_tokens?: number;
+	api_requests?: number;
+	failed_requests?: number;
+}
+
+interface LiteLLMActivityDay {
+	date: string;
+	metrics?: LiteLLMActivityMetrics;
+}
+
+interface LiteLLMActivityResponse {
+	results?: LiteLLMActivityDay[];
+	metadata?: {
+		total_spend?: number;
+		total_tokens?: number;
+		total_api_requests?: number;
+		total_failed_requests?: number;
+	};
+}
+
+interface LiteLLMUserInfoResponse {
+	user_id?: string;
+	user_info?: {
+		user_id?: string;
+		spend?: number;
+		max_budget?: number;
+		budget_reset_at?: string;
+	};
+}
+
+interface LiteLLMKeyInfoResponse {
+	info?: {
+		user_id?: string;
+	};
+}
+
+interface LiteLLMBudgetSnapshot {
+	startDate: string;
+	endDate: string;
+	lookbackDays: number;
+	todaySpend: number;
+	windowSpend: number;
+	budgetSpend?: number;
+	maxBudget?: number;
+	budgetResetAt?: string;
 }
 
 // ─── Rendering ───
@@ -304,10 +369,15 @@ function emitContextUsage(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 // ─── Provider segment ───
 
+function providerDisplayName(provider: string): string {
+	const models = readJsonFile<ModelsConfig>(join(homedir(), ".pi", "agent", "models.json"));
+	return models?.providers?.[provider]?.name ?? provider;
+}
+
 function emitProvider(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const model = ctx.model;
 	if (!model) return;
-	emitUpdate(pi, { id: "provider", text: model.provider, color: "dim" });
+	emitUpdate(pi, { id: "provider", text: providerDisplayName(model.provider), color: "dim" });
 }
 
 // ─── Model segment ───
@@ -353,6 +423,32 @@ function readJsonFile<T>(path: string): T | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function numberFromEnv(name: string): number | undefined {
+	const value = process.env[name];
+	if (!value) return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function liteLLMBudgetConfigPath(): string {
+	return join(homedir(), ".pi", "agent", "extensions", "powerbar", "litellm-budget.json");
+}
+
+function getLiteLLMBudgetConfig(): LiteLLMBudgetConfig {
+	const fileConfig = readJsonFile<Partial<LiteLLMBudgetConfig>>(liteLLMBudgetConfigPath()) ?? {};
+	return {
+		baseUrl: process.env.LITELLM_BUDGET_BASE_URL ?? fileConfig.baseUrl ?? "https://lite.llm.skymavis.services",
+		provider: process.env.LITELLM_BUDGET_PROVIDER ?? fileConfig.provider ?? "skymavis-litellm",
+		authModel: process.env.LITELLM_BUDGET_AUTH_MODEL ?? fileConfig.authModel ?? "claude-sonnet-4-6",
+		userId: process.env.LITELLM_BUDGET_USER_ID ?? process.env.SKY_MAVIS_LITELLM_USER_ID ?? fileConfig.userId,
+		timezoneMinutes: numberFromEnv("LITELLM_BUDGET_TIMEZONE") ?? fileConfig.timezoneMinutes ?? new Date().getTimezoneOffset(),
+		lookbackDays: Math.max(1, numberFromEnv("LITELLM_BUDGET_LOOKBACK_DAYS") ?? fileConfig.lookbackDays ?? 7),
+		refreshIntervalMs: Math.max(30_000, numberFromEnv("LITELLM_BUDGET_REFRESH_MS") ?? fileConfig.refreshIntervalMs ?? 300_000),
+		dailyBudgetUsd: numberFromEnv("LITELLM_BUDGET_DAILY_USD") ?? fileConfig.dailyBudgetUsd,
+		windowBudgetUsd: numberFromEnv("LITELLM_BUDGET_WINDOW_USD") ?? fileConfig.windowBudgetUsd,
+	};
 }
 
 function multiPassGlobalConfigPath(): string {
@@ -464,6 +560,145 @@ function emitSubUsage(pi: ExtensionAPI, usage: UsageSnapshot | undefined): void 
 	emitSubWindow(pi, "sub-weekly", usage.windows[1]);
 }
 
+// ─── LiteLLM budget segment ───
+
+function liteLLMDateRange(now: Date, timezoneMinutes: number, lookbackDays: number): { startDate: string; endDate: string } {
+	const local = new Date(now.getTime() - timezoneMinutes * 60_000);
+	const end = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+	const start = end - (lookbackDays - 1) * 24 * 60 * 60 * 1000;
+	return {
+		startDate: new Date(start).toISOString().slice(0, 10),
+		endDate: new Date(end).toISOString().slice(0, 10),
+	};
+}
+
+function formatSpend(value: number): string {
+	if (!Number.isFinite(value)) return "$0.00";
+	if (value >= 1000) return `$${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
+	return `$${value.toFixed(value < 10 ? 2 : value < 100 ? 1 : 0)}`;
+}
+
+function budgetColor(spend: number, budget?: number): string {
+	if (!budget || budget <= 0) return "muted";
+	const pct = (spend / budget) * 100;
+	if (pct >= 100) return "error";
+	if (pct >= 80) return "warning";
+	return "muted";
+}
+
+function readActivitySnapshot(
+	data: LiteLLMActivityResponse,
+	startDate: string,
+	endDate: string,
+	lookbackDays: number,
+	userInfo?: LiteLLMUserInfoResponse,
+): LiteLLMBudgetSnapshot {
+	const days = data.results ?? [];
+	const today = days.find((day) => day.date === endDate);
+	return {
+		startDate,
+		endDate,
+		lookbackDays,
+		todaySpend: today?.metrics?.spend ?? 0,
+		windowSpend: data.metadata?.total_spend ?? days.reduce((sum, day) => sum + (day.metrics?.spend ?? 0), 0),
+		budgetSpend: userInfo?.user_info?.spend,
+		maxBudget: userInfo?.user_info?.max_budget,
+		budgetResetAt: userInfo?.user_info?.budget_reset_at,
+	};
+}
+
+async function fetchLiteLLMJson<T>(url: URL, apiKey: string, headers?: Record<string, string>, signal?: AbortSignal): Promise<T> {
+	const response = await fetch(url, {
+		headers: {
+			accept: "application/json",
+			"content-type": "application/json",
+			...(headers ?? {}),
+			authorization: `Bearer ${apiKey}`,
+		},
+		signal,
+	});
+	if (!response.ok) {
+		const body = await response.text().catch(() => "");
+		throw new Error(`LiteLLM request failed: HTTP ${response.status}${body ? ` ${body.slice(0, 160)}` : ""}`);
+	}
+	return (await response.json()) as T;
+}
+
+async function resolveLiteLLMUserInfo(
+	config: LiteLLMBudgetConfig,
+	apiKey: string,
+	headers?: Record<string, string>,
+	signal?: AbortSignal,
+): Promise<LiteLLMUserInfoResponse> {
+	const userInfoUrl = new URL("/user/info", config.baseUrl);
+	if (config.userId) {
+		userInfoUrl.searchParams.set("user_id", config.userId);
+	}
+	try {
+		const userInfo = await fetchLiteLLMJson<LiteLLMUserInfoResponse>(userInfoUrl, apiKey, headers, signal);
+		if (userInfo.user_id || userInfo.user_info?.user_id) return userInfo;
+	} catch {
+		// Fall through to /key/info, which can still expose the owning user id for spend-enabled keys.
+	}
+
+	const keyInfoUrl = new URL("/key/info", config.baseUrl);
+	keyInfoUrl.searchParams.set("key", apiKey);
+	const keyInfo = await fetchLiteLLMJson<LiteLLMKeyInfoResponse>(keyInfoUrl, apiKey, headers, signal);
+	const userId = keyInfo.info?.user_id;
+	if (!userId) {
+		throw new Error(`LiteLLM user id unavailable. Optionally set userId in ${liteLLMBudgetConfigPath()}`);
+	}
+
+	const resolvedUserInfoUrl = new URL("/user/info", config.baseUrl);
+	resolvedUserInfoUrl.searchParams.set("user_id", userId);
+	return fetchLiteLLMJson<LiteLLMUserInfoResponse>(resolvedUserInfoUrl, apiKey, headers, signal);
+}
+
+async function fetchLiteLLMBudget(ctx: ExtensionContext, config: LiteLLMBudgetConfig): Promise<LiteLLMBudgetSnapshot> {
+	const activeModel = ctx.model?.provider === config.provider ? ctx.model : undefined;
+	const model = activeModel ?? ctx.modelRegistry.find(config.provider, config.authModel);
+	if (!model) {
+		throw new Error(`No model registered for ${config.provider}/${config.authModel}`);
+	}
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	if (auth.ok === false) {
+		throw new Error(auth.error);
+	}
+	if (!auth.apiKey) {
+		throw new Error(`No API key available for ${config.provider}`);
+	}
+
+	const userInfo = await resolveLiteLLMUserInfo(config, auth.apiKey, auth.headers, ctx.signal);
+	const userId = config.userId ?? userInfo.user_id ?? userInfo.user_info?.user_id;
+	if (!userId) {
+		throw new Error(`LiteLLM user id unavailable. Optionally set userId in ${liteLLMBudgetConfigPath()}`);
+	}
+
+	const { startDate, endDate } = liteLLMDateRange(new Date(), config.timezoneMinutes, config.lookbackDays);
+	const url = new URL("/user/daily/activity", config.baseUrl);
+	url.searchParams.set("start_date", startDate);
+	url.searchParams.set("end_date", endDate);
+	url.searchParams.set("page_size", "1000");
+	url.searchParams.set("page", "1");
+	url.searchParams.set("timezone", String(config.timezoneMinutes));
+	url.searchParams.set("user_id", userId);
+
+	const activity = await fetchLiteLLMJson<LiteLLMActivityResponse>(url, auth.apiKey, auth.headers, ctx.signal);
+	return readActivitySnapshot(activity, startDate, endDate, config.lookbackDays, userInfo);
+}
+
+function emitLiteLLMBudget(pi: ExtensionAPI, snapshot: LiteLLMBudgetSnapshot, config: LiteLLMBudgetConfig): void {
+	const text = snapshot.maxBudget
+		? `budget ${formatSpend(snapshot.budgetSpend ?? snapshot.windowSpend)}/${formatSpend(snapshot.maxBudget)} today ${formatSpend(snapshot.todaySpend)}`
+		: `today ${formatSpend(snapshot.todaySpend)} ${snapshot.lookbackDays}d ${formatSpend(snapshot.windowSpend)}`;
+	const color = snapshot.maxBudget
+		? budgetColor(snapshot.budgetSpend ?? snapshot.windowSpend, snapshot.maxBudget)
+		: budgetColor(snapshot.todaySpend, config.dailyBudgetUsd) === "muted"
+			? budgetColor(snapshot.windowSpend, config.windowBudgetUsd)
+			: budgetColor(snapshot.todaySpend, config.dailyBudgetUsd);
+	emitUpdate(pi, { id: "litellm-budget", text, icon: "◒", color });
+}
+
 // ─── Main extension ───
 
 export default function createExtension(pi: ExtensionAPI): void {
@@ -471,6 +706,8 @@ export default function createExtension(pi: ExtensionAPI): void {
 	let currentCtx: ExtensionContext | undefined;
 	let modelState: string | undefined;
 	let modelStateTimer: ReturnType<typeof setInterval> | undefined;
+	let liteLLMBudgetTimer: ReturnType<typeof setInterval> | undefined;
+	let liteLLMBudgetInFlight: Promise<void> | undefined;
 
 	function refresh(): void {
 		if (!currentCtx?.hasUI) return;
@@ -548,10 +785,61 @@ export default function createExtension(pi: ExtensionAPI): void {
 		}, 250);
 	}
 
+	async function syncLiteLLMBudget(ctx: ExtensionContext): Promise<void> {
+		const config = getLiteLLMBudgetConfig();
+		if (ctx.model?.provider !== config.provider) {
+			emitRemove(pi, "litellm-budget");
+			return;
+		}
+		if (liteLLMBudgetInFlight) return liteLLMBudgetInFlight;
+
+		liteLLMBudgetInFlight = fetchLiteLLMBudget(ctx, config)
+			.then((snapshot) => {
+				if (currentCtx?.model?.provider === config.provider) {
+					emitLiteLLMBudget(pi, snapshot, config);
+				}
+			})
+			.catch(() => {
+				if (currentCtx?.model?.provider === config.provider) {
+					emitUpdate(pi, { id: "litellm-budget", text: "budget unavailable", icon: "◒", color: "warning" });
+				}
+			})
+			.finally(() => {
+				liteLLMBudgetInFlight = undefined;
+			});
+		return liteLLMBudgetInFlight;
+	}
+
+	function startLiteLLMBudgetWatcher(ctx: ExtensionContext): void {
+		if (liteLLMBudgetTimer) clearInterval(liteLLMBudgetTimer);
+		void syncLiteLLMBudget(ctx);
+		liteLLMBudgetTimer = setInterval(() => {
+			if (currentCtx) void syncLiteLLMBudget(currentCtx);
+		}, getLiteLLMBudgetConfig().refreshIntervalMs);
+	}
+
+	function isLiteLLMProviderActive(): boolean {
+		return currentCtx?.model?.provider === getLiteLLMBudgetConfig().provider;
+	}
+
+	function clearSubUsage(): void {
+		emitRemove(pi, "sub-hourly");
+		emitRemove(pi, "sub-weekly");
+	}
+
+	function emitSubUsageForActiveProvider(usage: UsageSnapshot | undefined): void {
+		if (isLiteLLMProviderActive()) {
+			clearSubUsage();
+			return;
+		}
+		emitSubUsage(pi, usage);
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
 		hideFooter(ctx);
 		startModelStateWatcher(ctx);
+		startLiteLLMBudgetWatcher(ctx);
 		refresh();
 	});
 
@@ -559,6 +847,10 @@ export default function createExtension(pi: ExtensionAPI): void {
 		if (modelStateTimer) {
 			clearInterval(modelStateTimer);
 			modelStateTimer = undefined;
+		}
+		if (liteLLMBudgetTimer) {
+			clearInterval(liteLLMBudgetTimer);
+			liteLLMBudgetTimer = undefined;
 		}
 		modelState = undefined;
 		if (ctx.hasUI) {
@@ -611,14 +903,22 @@ export default function createExtension(pi: ExtensionAPI): void {
 	pi.on("turn_start", async (_event, ctx) => emitMultiPassPool(pi, ctx));
 	pi.on("tool_result", async (_event, ctx) => emitMultiPassPool(pi, ctx));
 
+	// ─── LiteLLM budget events ───
+	pi.on("session_start", async (_event, ctx) => void syncLiteLLMBudget(ctx));
+	pi.on("model_select", async (_event, ctx) => {
+		if (ctx.model?.provider === getLiteLLMBudgetConfig().provider) clearSubUsage();
+		void syncLiteLLMBudget(ctx);
+	});
+	pi.on("agent_end", async (_event, ctx) => void syncLiteLLMBudget(ctx));
+
 	// ─── Sub usage events ───
 	pi.events.on("sub-core:ready", (payload: unknown) => {
 		const data = payload as { state?: SubCoreState };
-		emitSubUsage(pi, data.state?.usage);
+		emitSubUsageForActiveProvider(data.state?.usage);
 	});
 	pi.events.on("sub-core:update-current", (payload: unknown) => {
 		const data = payload as { state?: SubCoreState };
-		emitSubUsage(pi, data.state?.usage);
+		emitSubUsageForActiveProvider(data.state?.usage);
 	});
 	pi.events.on("sub-core:update-all", (payload: unknown) => {
 		const data = payload as { state?: SubCoreAllState };
@@ -626,6 +926,6 @@ export default function createExtension(pi: ExtensionAPI): void {
 		const entry = currentProvider
 			? data.state?.entries?.find((e) => e.provider === currentProvider)
 			: data.state?.entries?.[0];
-		emitSubUsage(pi, entry?.usage);
+		emitSubUsageForActiveProvider(entry?.usage);
 	});
 }
