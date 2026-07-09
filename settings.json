@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.80.2",
-  "defaultProvider": "zai",
-  "defaultModel": "glm-5.2",
+  "lastChangelogVersion": "0.80.3",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
@@ -16,7 +16,5 @@
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
   "enableInstallTelemetry": false,
-  "packages": [
-    "https://github.com/nicobailon/pi-mcp-adapter"
-  ]
+  "packages": []
 }

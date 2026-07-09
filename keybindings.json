@@ -1,8 +1,12 @@
 {
   "app.thinking.toggle": "ctrl+shift+t",
   "app.tree.filter.noTools": "alt+t",
-  "app.model.select": ["ctrl+p", "ctrl+l"],
+  "app.model.select": [
+    "ctrl+p",
+    "ctrl+l"
+  ],
   "app.model.cycleForward": [],
   "app.session.togglePath": [],
+  "app.models.clearAll": [],
   "app.models.toggleProvider": []
 }
