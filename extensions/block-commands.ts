@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const BLOCKED_COMMANDS = ["gcloud", "sops"] as const;
+const BLOCKED_COMMANDS = ["gcloud", "sops", "kubectl"] as const;
 
 function findBlockedCommand(command: string): string | undefined {
   const blockedPattern = new RegExp(
