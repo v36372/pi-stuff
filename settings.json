@@ -1,16 +1,20 @@
 {
-  "lastChangelogVersion": "0.80.2",
+  "lastChangelogVersion": "0.80.6",
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
+  "defaultModel": "gpt-5.6-sol",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "collapseChangelog": true,
   "enabledModels": [
-    "openai-codex/gpt-5.5",
     "opencode-go/glm-5.2",
     "opencode-go/kimi-k2.7-code",
-    "zai/glm-5.2"
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-terra",
+    "opencode-go/deepseek-v4-pro",
+    "skymavis-litellm/claude-sonnet-4-6",
+    "skymavis-litellm/claude-opus-4-8"
   ],
   "quietStartup": true,
   "doubleEscapeAction": "tree",
