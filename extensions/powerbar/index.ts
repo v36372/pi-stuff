@@ -8,7 +8,7 @@
 import { type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { RateWindow, SubCoreAllState, SubCoreState, UsageSnapshot } from "@marckrenn/pi-sub-shared";
+import { fetchSubUsage, type RateWindow, type UsageSnapshot } from "./sub-usage.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -27,6 +27,7 @@ const ROWS = [
 ] as const;
 const SEPARATOR = " │ ";
 const PLACEMENT: "aboveEditor" | "belowEditor" = "belowEditor";
+const SUB_USAGE_REFRESH_MS = 60_000;
 
 // ─── Types ───
 
@@ -136,6 +137,7 @@ function renderSegmentText(segment: Segment, theme: Theme): string {
 }
 
 interface RenderedSegment {
+	id?: string;
 	text: string;
 	width: number;
 }
@@ -146,7 +148,7 @@ function renderSideSegments(ids: string[], segments: Map<string, Segment>, theme
 		const seg = segments.get(id);
 		if (!seg || (!seg.text && !seg.suffix && !seg.icon)) continue;
 		const text = renderSegmentText(seg, theme);
-		rendered.push({ text, width: visibleWidth(text) });
+		rendered.push({ id, text, width: visibleWidth(text) });
 	}
 	return rendered;
 }
@@ -231,7 +233,8 @@ function renderBars(segments: Map<string, Segment>, theme: Theme, width: number)
 			totalNeeded = left.width + right.width + minPadding;
 		}
 
-		const rightOffset = Math.max(0, maxRightWidth - right.width);
+		const isLiteLLMBudgetOnly = row.right.length === 1 && row.right[0]?.id === "litellm-budget";
+		const rightOffset = isLiteLLMBudgetOnly ? 0 : Math.max(0, maxRightWidth - right.width);
 		const padding = Math.max(minPadding, width - left.width - right.width - rightOffset);
 		const line = `${left.text}${" ".repeat(padding)}${right.text}${" ".repeat(rightOffset)}`;
 
@@ -708,6 +711,9 @@ export default function createExtension(pi: ExtensionAPI): void {
 	let modelStateTimer: ReturnType<typeof setInterval> | undefined;
 	let liteLLMBudgetTimer: ReturnType<typeof setInterval> | undefined;
 	let liteLLMBudgetInFlight: Promise<void> | undefined;
+	let subUsageTimer: ReturnType<typeof setInterval> | undefined;
+	let subUsageInFlight: Promise<void> | undefined;
+	let subUsageRequestKey: string | undefined;
 
 	function refresh(): void {
 		if (!currentCtx?.hasUI) return;
@@ -818,6 +824,43 @@ export default function createExtension(pi: ExtensionAPI): void {
 		}, getLiteLLMBudgetConfig().refreshIntervalMs);
 	}
 
+	function subUsageModelKey(ctx: ExtensionContext): string {
+		return `${ctx.model?.provider ?? ""}:${ctx.model?.id ?? ""}`;
+	}
+
+	async function syncSubUsage(ctx: ExtensionContext): Promise<void> {
+		if (isLiteLLMProviderActive()) {
+			clearSubUsage();
+			return;
+		}
+		const requestKey = subUsageModelKey(ctx);
+		if (subUsageInFlight) {
+			if (subUsageRequestKey === requestKey) return subUsageInFlight;
+			return subUsageInFlight;
+		}
+
+		subUsageRequestKey = requestKey;
+		subUsageInFlight = fetchSubUsage(ctx.model)
+			.then((usage) => {
+				if (currentCtx === ctx && subUsageModelKey(ctx) === requestKey) emitSubUsage(pi, usage);
+			})
+			.finally(() => {
+				subUsageInFlight = undefined;
+				subUsageRequestKey = undefined;
+				if (currentCtx && subUsageModelKey(currentCtx) !== requestKey) void syncSubUsage(currentCtx);
+			});
+		return subUsageInFlight;
+	}
+
+	function startSubUsageWatcher(ctx: ExtensionContext): void {
+		if (subUsageTimer) clearInterval(subUsageTimer);
+		void syncSubUsage(ctx);
+		subUsageTimer = setInterval(() => {
+			if (currentCtx) void syncSubUsage(currentCtx);
+		}, SUB_USAGE_REFRESH_MS);
+		subUsageTimer.unref?.();
+	}
+
 	function isLiteLLMProviderActive(): boolean {
 		return currentCtx?.model?.provider === getLiteLLMBudgetConfig().provider;
 	}
@@ -825,14 +868,6 @@ export default function createExtension(pi: ExtensionAPI): void {
 	function clearSubUsage(): void {
 		emitRemove(pi, "sub-hourly");
 		emitRemove(pi, "sub-weekly");
-	}
-
-	function emitSubUsageForActiveProvider(usage: UsageSnapshot | undefined): void {
-		if (isLiteLLMProviderActive()) {
-			clearSubUsage();
-			return;
-		}
-		emitSubUsage(pi, usage);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -851,6 +886,10 @@ export default function createExtension(pi: ExtensionAPI): void {
 		if (liteLLMBudgetTimer) {
 			clearInterval(liteLLMBudgetTimer);
 			liteLLMBudgetTimer = undefined;
+		}
+		if (subUsageTimer) {
+			clearInterval(subUsageTimer);
+			subUsageTimer = undefined;
 		}
 		modelState = undefined;
 		if (ctx.hasUI) {
@@ -912,20 +951,7 @@ export default function createExtension(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (_event, ctx) => void syncLiteLLMBudget(ctx));
 
 	// ─── Sub usage events ───
-	pi.events.on("sub-core:ready", (payload: unknown) => {
-		const data = payload as { state?: SubCoreState };
-		emitSubUsageForActiveProvider(data.state?.usage);
-	});
-	pi.events.on("sub-core:update-current", (payload: unknown) => {
-		const data = payload as { state?: SubCoreState };
-		emitSubUsageForActiveProvider(data.state?.usage);
-	});
-	pi.events.on("sub-core:update-all", (payload: unknown) => {
-		const data = payload as { state?: SubCoreAllState };
-		const currentProvider = data.state?.provider;
-		const entry = currentProvider
-			? data.state?.entries?.find((e) => e.provider === currentProvider)
-			: data.state?.entries?.[0];
-		emitSubUsageForActiveProvider(entry?.usage);
-	});
+	pi.on("session_start", async (_event, ctx) => startSubUsageWatcher(ctx));
+	pi.on("model_select", async (_event, ctx) => void syncSubUsage(ctx));
+	pi.on("turn_end", async (_event, ctx) => void syncSubUsage(ctx));
 }
