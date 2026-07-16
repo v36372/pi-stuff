@@ -167,9 +167,9 @@ export default function (pi: ExtensionAPI) {
 
     const choice = await ctx.ui.select(
       `Allow this ${confirm} command once?\n\n${command}`,
-      ["Allow once", "Block"],
+      ["Yes", "No"],
     );
-    if (choice === "Allow once") return;
+    if (choice === "Yes") return;
 
     return {
       block: true,
@@ -206,9 +206,9 @@ export default function (pi: ExtensionAPI) {
 
     const choice = await ctx.ui.select(
       `Allow this ${confirm} command once?\n\n${event.command}`,
-      ["Allow once", "Block"],
+      ["Yes", "No"],
     );
-    if (choice === "Allow once") return;
+    if (choice === "Yes") return;
 
     return {
       result: {
