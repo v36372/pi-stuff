@@ -15,6 +15,15 @@ function ghCommandPattern(command: string): RegExp {
 
 const BLOCKED_COMMAND_PATTERNS = [
   {
+    name: "direct AKHQ access (use ./tools/akhq/akhq)",
+    pattern: /(^|[^\w.-])akhq\.skymavis\.tools(?=$|[^\w.-])/i,
+  },
+  {
+    name: "AKHQ state-changing API",
+    pattern:
+      /\/api\/[^/\s"'?]+\/connect\/[^/\s"'?]+\/[^/\s"'?]+\/(?:pause|resume|restart|tasks\/[^/\s"'?]+\/restart)(?=$|[/?#\s"';&|])/i,
+  },
+  {
     name: "helm diff upgrade",
     pattern: /(^|[^\w.-])helm\s+diff\s+upgrade(?=$|[^\w.-])/i,
   },
