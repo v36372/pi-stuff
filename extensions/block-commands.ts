@@ -13,6 +13,18 @@ function ghCommandPattern(command: string): RegExp {
   );
 }
 
+const CONFIRM_COMMAND_PATTERNS = [
+  {
+    name: "git push",
+    pattern:
+      /(^|[^\w.-])git(?:\s+(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path)\s+\S+|\s+(?:-C|-c)\S+|\s+--[\w-]+(?:=\S+)?)*\s+push(?=$|[^\w.-])/i,
+  },
+  {
+    name: "gh pull request create",
+    pattern: ghCommandPattern("pr\\s+create"),
+  },
+] as const;
+
 const BLOCKED_COMMAND_PATTERNS = [
   {
     name: "direct AKHQ access (use ./tools/akhq/akhq)",
@@ -28,9 +40,9 @@ const BLOCKED_COMMAND_PATTERNS = [
     pattern: /(^|[^\w.-])helm\s+diff\s+upgrade(?=$|[^\w.-])/i,
   },
   {
-    name: "git remote write",
+    name: "git send-pack",
     pattern:
-      /(^|[^\w.-])git(?:\s+(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path)\s+\S+|\s+(?:-C|-c)\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:push|send-pack)(?=$|[^\w.-])/i,
+      /(^|[^\w.-])git(?:\s+(?:-C|-c|--config-env|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path)\s+\S+|\s+(?:-C|-c)\S+|\s+--[\w-]+(?:=\S+)?)*\s+send-pack(?=$|[^\w.-])/i,
   },
   {
     name: "git lfs push",
@@ -77,7 +89,7 @@ const BLOCKED_COMMAND_PATTERNS = [
   {
     name: "gh pull request write",
     pattern: ghCommandPattern(
-      "pr\\s+(?:close|comment|create|new|edit|lock|merge|ready|reopen|revert|review|unlock|update-branch)",
+      "pr\\s+(?:close|comment|new|edit|lock|merge|ready|reopen|revert|review|unlock|update-branch)",
     ),
   },
   {
@@ -126,27 +138,81 @@ function findBlockedCommand(command: string): string | undefined {
   return BLOCKED_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))?.name;
 }
 
+function findConfirmCommand(command: string): string | undefined {
+  return CONFIRM_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))?.name;
+}
+
 export default function (pi: ExtensionAPI) {
-  pi.on("tool_call", async (event) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") return;
 
     const command = event.input.command as string;
     const blocked = findBlockedCommand(command);
-    if (!blocked) return;
+    if (blocked) {
+      return {
+        block: true,
+        reason: `Blocked command: ${blocked}`,
+      };
+    }
+
+    const confirm = findConfirmCommand(command);
+    if (!confirm) return;
+
+    if (!ctx.hasUI) {
+      return {
+        block: true,
+        reason: `Blocked command: ${confirm} requires user confirmation`,
+      };
+    }
+
+    const choice = await ctx.ui.select(
+      `Allow this ${confirm} command once?\n\n${command}`,
+      ["Allow once", "Block"],
+    );
+    if (choice === "Allow once") return;
 
     return {
       block: true,
-      reason: `Blocked command: ${blocked}`,
+      reason: `Blocked by user: ${confirm}`,
     };
   });
 
-  pi.on("user_bash", (event) => {
+  pi.on("user_bash", async (event, ctx) => {
     const blocked = findBlockedCommand(event.command);
-    if (!blocked) return;
+    if (blocked) {
+      return {
+        result: {
+          output: `Blocked command: ${blocked}`,
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
+
+    const confirm = findConfirmCommand(event.command);
+    if (!confirm) return;
+
+    if (!ctx.hasUI) {
+      return {
+        result: {
+          output: `Blocked command: ${confirm} requires user confirmation`,
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
+
+    const choice = await ctx.ui.select(
+      `Allow this ${confirm} command once?\n\n${event.command}`,
+      ["Allow once", "Block"],
+    );
+    if (choice === "Allow once") return;
 
     return {
       result: {
-        output: `Blocked command: ${blocked}`,
+        output: `Blocked by user: ${confirm}`,
         exitCode: 1,
         cancelled: false,
         truncated: false,
