@@ -25,16 +25,23 @@ Before continuing:
 };
 
 /**
- * Automatically resumes work after every successful Pi compaction.
+ * Automatically resumes work after automatic Pi compaction (threshold or overflow).
  *
- * The continuation is deferred by one event-loop turn so manual compaction can
+ * The continuation is deferred by one event-loop turn so automatic compaction can
  * finish reconnecting the agent runtime before a new prompt begins. During an
  * active automatic-compaction recovery, it is delivered as a follow-up.
+ *
+ * User-initiated `/compact` is intentionally skipped so the user keeps control
+ * of when to continue.
  */
 export default function continueAfterCompaction(pi: ExtensionAPI): void {
 	const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
 	pi.on("session_compact", (event, ctx) => {
+		if (event.reason === "manual") {
+			return;
+		}
+
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		const prompt = buildContinuationPrompt(sessionFile, event.compactionEntry.id);
 
