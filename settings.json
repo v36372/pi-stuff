@@ -1,20 +1,15 @@
 {
-  "lastChangelogVersion": "0.80.7",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "lastChangelogVersion": "0.80.10",
+  "defaultProvider": "grok-cli",
+  "defaultModel": "grok-4.5",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "collapseChangelog": true,
   "enabledModels": [
-    "opencode-go/glm-5.2",
-    "opencode-go/kimi-k2.7-code",
-    "openai-codex/gpt-5.6-luna",
-    "openai-codex/gpt-5.6-sol",
-    "openai-codex/gpt-5.6-terra",
-    "opencode-go/deepseek-v4-pro",
-    "skymavis-litellm/claude-sonnet-4-6",
-    "skymavis-litellm/claude-opus-4-8"
+    "opencode-go/grok-4.5",
+    "grok-cli/grok-4.5",
+    "grok-cli/grok-composer-2.5-fast"
   ],
   "quietStartup": true,
   "doubleEscapeAction": "tree",
