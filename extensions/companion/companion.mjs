@@ -19,6 +19,7 @@ const STATUS_COLOR = {
   editing:   '#FACC15',
   running:   '#F97316',
   searching: '#8B5CF6',
+  waiting:   '#E2E8F0',
   done:      '#22C55E',
   error:     '#EF4444',
 };
@@ -29,6 +30,7 @@ const STATUS_LABEL = {
   editing:   'Editing',
   running:   'Running',
   searching: 'Searching',
+  waiting:   'NEEDS YOU',
   done:      'Done',
   error:     'Error',
 };
@@ -84,6 +86,21 @@ body {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
+}
+.row.attention .cat {
+  color: #FFFFFF !important;
+  -webkit-text-fill-color: #FFFFFF;
+  animation: cat-glow 0.55s ease-in-out infinite alternate;
+}
+@keyframes cat-glow {
+  from {
+    transform: scale(1);
+    filter: drop-shadow(0 0 2px #FFFFFF) drop-shadow(0 0 4px #CBD5E1);
+  }
+  to {
+    transform: scale(1.22);
+    filter: drop-shadow(0 0 4px #FFFFFF) drop-shadow(0 0 9px #CBD5E1) drop-shadow(0 0 14px #94A3B8);
+  }
 }
 .cat {
   width: 14px;
@@ -172,12 +189,12 @@ function startCatTick() {
   }, 167);
 }
 
-function update(id, dotColor, project, status, detail, contextPercent) {
+function update(id, dotColor, project, status, detail, contextPercent, attention) {
   if (!_startTimes[id]) _startTimes[id] = Date.now();
   if (status === 'Done' && _startTimes[id] && !_frozenElapsed[id]) {
     _frozenElapsed[id] = fmtElapsed(Date.now() - _startTimes[id]);
   }
-  _rows[id] = { dotColor: dotColor, project: project, status: status, detail: detail, contextPercent: contextPercent };
+  _rows[id] = { dotColor: dotColor, project: project, status: status, detail: detail, contextPercent: contextPercent, attention: attention };
   render();
   startTick();
   startCatTick();
@@ -199,11 +216,13 @@ function render() {
     return;
   }
   pill.style.opacity = '1';
+  var hasAttention = ids.some(function(id) { return _rows[id].attention; });
+  pill.classList.toggle('attention', hasAttention);
   var html = '';
   for (var i = 0; i < ids.length; i++) {
     var r = _rows[ids[i]];
     html += '<div id="r-' + ids[i] + '">';
-    html += '<div class="row">';
+    html += '<div class="row' + (r.attention ? ' attention' : '') + '">';
     html += '<span id="cat-' + ids[i] + '" class="cat" style="color:' + r.dotColor + '">' + _catFrames[_catFrame] + '</span>';
     html += '<span class="project">' + esc(r.project) + '</span>';
     if (r.status) {
@@ -264,7 +283,8 @@ function pushUpdate(id, data) {
   const detail = truncate(data.detail ?? '', 60);
   const project = esc(data.project ?? 'pi');
   const ctxPct = data.contextPercent ?? null;
-  const js = `update(${JSON.stringify(id)},${JSON.stringify(color)},${JSON.stringify(project)},${JSON.stringify(label)},${JSON.stringify(detail)},${JSON.stringify(ctxPct)})`;
+  const attention = data.status === 'waiting';
+  const js = `update(${JSON.stringify(id)},${JSON.stringify(color)},${JSON.stringify(project)},${JSON.stringify(label)},${JSON.stringify(detail)},${JSON.stringify(ctxPct)},${JSON.stringify(attention)})`;
   if (winReady) win.send(js);
   else pendingUpdates.push(js);
 }

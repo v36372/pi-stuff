@@ -75,6 +75,17 @@ export default function (pi: ExtensionAPI) {
     lastStatus = "";
   }
 
+  function isAskUserTool(toolName: string): boolean {
+    return toolName === "ask_user" || toolName === "ask_user_question";
+  }
+
+  function getQuestionDetail(args: any): string {
+    const questions = Array.isArray(args.questions) ? args.questions : [];
+    const first = questions[0];
+    const question = first?.question ?? first?.header ?? args.question ?? args.prompt ?? "";
+    return questions.length > 1 ? `${questions.length} questions · ${question}` : question;
+  }
+
   function connectToCompanion(): Promise<void> {
     return new Promise((resolve) => {
       sock = connect(SOCK, () => resolve());
@@ -200,6 +211,11 @@ export default function (pi: ExtensionAPI) {
     lastCtx = ctx;
     const { toolName, args = {} } = event;
 
+    if (isAskUserTool(toolName)) {
+      send("waiting", getQuestionDetail(args));
+      return;
+    }
+
     switch (toolName) {
       case "read":
         send("reading", basename(args.path ?? ""));
@@ -226,6 +242,9 @@ export default function (pi: ExtensionAPI) {
     lastCtx = ctx;
     if (event.isError) {
       send("error", event.toolName);
+    } else if (isAskUserTool(event.toolName)) {
+      // Clear the attention state as soon as the user answers.
+      send("thinking");
     }
   });
 
