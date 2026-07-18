@@ -15,7 +15,5 @@
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
   "enableInstallTelemetry": false,
-  "packages": [
-    "https://github.com/nicobailon/pi-mcp-adapter"
-  ]
+  "packages": []
 }
