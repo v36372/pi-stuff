@@ -1,5 +1,9 @@
 {
   "name": "pi-grok-cli-vendored",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "ignore": "7.0.5",
+    "minimatch": "10.2.5"
+  }
 }
