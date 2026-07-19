@@ -1,10 +1,8 @@
 import { isAbsolute, resolve } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { Container, Text } from '@earendil-works/pi-tui';
-import { loadConfig, saveConfig } from '../config.js';
 import { parseImagineArgs } from './parseArgs.js';
 import { imagePreview } from './preview.js';
-import { registerImageGenTool } from './tool.js';
 import {
   DEFAULT_IMAGINE_DEPENDENCIES,
   generateAndSaveImage,
@@ -12,22 +10,6 @@ import {
 } from './workflow.js';
 
 const ENTRY_TYPE = 'grok-cli-imagine';
-
-function applyImageToolPreference(pi: ExtensionAPI, enabled: boolean) {
-  const activeTools = pi.getActiveTools();
-  const nextTools = enabled
-    ? activeTools.includes('image_gen')
-      ? activeTools
-      : [...activeTools, 'image_gen']
-    : activeTools.filter((toolName) => toolName !== 'image_gen');
-  if (
-    activeTools.length === nextTools.length &&
-    activeTools.every((toolName, index) => toolName === nextTools[index])
-  ) {
-    return;
-  }
-  pi.setActiveTools(nextTools);
-}
 
 type ImagineEntry = {
   path: string;
@@ -99,39 +81,4 @@ export function registerImagineFeature(
       }
     },
   });
-
-  pi.registerCommand('grok-cli-imagine:tool', {
-    description: 'Toggle or report persisted image_gen availability',
-    handler: async (args, ctx) => {
-      const argument = args.trim().toLowerCase();
-      if (argument && argument !== 'on' && argument !== 'off' && argument !== 'status') {
-        ctx.ui.notify('Usage: /grok-cli-imagine:tool [on|off|status]', 'error');
-        return;
-      }
-      const loaded = loadConfig();
-      if (loaded.warning) ctx.ui.notify(loaded.warning, 'warning');
-      if (argument === 'status') {
-        ctx.ui.notify(
-          `image_gen persisted: ${loaded.config.imagine.enabled ? 'on' : 'off'}; active: ${pi.getActiveTools().includes('image_gen') ? 'on' : 'off'}`,
-          'info',
-        );
-        return;
-      }
-
-      const enabled = argument ? argument === 'on' : !loaded.config.imagine.enabled;
-      try {
-        saveConfig({ ...loaded.config, imagine: { enabled } });
-      } catch (error) {
-        ctx.ui.notify(
-          `Could not save image_gen setting: ${error instanceof Error ? error.message : String(error)}`,
-          'error',
-        );
-        return;
-      }
-      applyImageToolPreference(pi, enabled);
-      ctx.ui.notify(`image_gen: ${enabled ? 'on' : 'off'}`, 'info');
-    },
-  });
-
-  registerImageGenTool(pi, dependencies);
 }

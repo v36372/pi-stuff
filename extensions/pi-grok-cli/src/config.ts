@@ -17,8 +17,6 @@ export const DEFAULT_DESCRIBE_MODEL = 'grok-build';
 export const DEFAULT_MAX_IMAGES = 4;
 export const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
-export type ImagineConfig = { enabled: boolean };
-
 export interface VisionConfig {
   enabled: boolean;
   model: string;
@@ -29,11 +27,8 @@ export interface VisionConfig {
 
 export interface GrokCliConfig {
   version: typeof CONFIG_VERSION;
-  imagine: ImagineConfig;
   vision: VisionConfig;
 }
-
-export const DEFAULT_IMAGINE_CONFIG: ImagineConfig = { enabled: true };
 
 export const DEFAULT_VISION_CONFIG: VisionConfig = {
   enabled: true,
@@ -45,7 +40,6 @@ export const DEFAULT_VISION_CONFIG: VisionConfig = {
 
 export const DEFAULT_CONFIG: GrokCliConfig = {
   version: CONFIG_VERSION,
-  imagine: DEFAULT_IMAGINE_CONFIG,
   vision: DEFAULT_VISION_CONFIG,
 };
 
@@ -64,13 +58,11 @@ type LegacyConfig = LoadedConfig & {
 const homePath = () => process.env.HOME || homedir();
 
 export const getConfigPath = () => join(homePath(), '.pi', 'grok-cli.json');
-export const getLegacyImagineConfigPath = () => join(homePath(), '.pi', 'grok-cli-imagine.json');
 export const getLegacyVisionConfigPath = () => join(homePath(), '.pi', 'grok-cli-vision.json');
 
 function defaultConfig(): GrokCliConfig {
   return {
     version: CONFIG_VERSION,
-    imagine: { ...DEFAULT_IMAGINE_CONFIG },
     vision: { ...DEFAULT_VISION_CONFIG },
   };
 }
@@ -92,19 +84,6 @@ export function describableModels(): string[] {
   return resolveModels()
     .filter((model) => model.input.includes('image'))
     .map((model) => model.id);
-}
-
-function normalizeImagineConfig(raw: unknown, warnings: string[]): ImagineConfig {
-  if (raw === undefined) return { ...DEFAULT_IMAGINE_CONFIG };
-  if (!isObject(raw)) {
-    warnings.push('imagine must be a JSON object. Using defaults.');
-    return { ...DEFAULT_IMAGINE_CONFIG };
-  }
-  if (typeof raw.enabled === 'boolean') return { enabled: raw.enabled };
-  if (raw.enabled !== undefined) {
-    warnings.push('imagine.enabled must be true or false. Using enabled=true.');
-  }
-  return { ...DEFAULT_IMAGINE_CONFIG };
 }
 
 export function normalizeVisionConfig(
@@ -170,7 +149,7 @@ export function normalizeVisionConfig(
 }
 
 function normalizeConfig(
-  raw: { imagine?: unknown; vision?: unknown },
+  raw: { vision?: unknown },
   warnings: string[],
 ): GrokCliConfig {
   const vision = raw.vision;
@@ -179,7 +158,6 @@ function normalizeConfig(
   }
   return {
     version: CONFIG_VERSION,
-    imagine: normalizeImagineConfig(raw.imagine, warnings),
     vision: normalizeVisionConfig(isObject(vision) ? vision : {}, warnings),
   };
 }
@@ -216,47 +194,6 @@ function parseConfig(configPath: string): ParsedConfig {
   }
 }
 
-function parseLegacyImagine(configPath: string): {
-  config: ImagineConfig;
-  recognized: boolean;
-  warning?: string;
-} {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
-    if (!isObject(parsed)) {
-      return {
-        config: { ...DEFAULT_IMAGINE_CONFIG },
-        recognized: false,
-        warning: `Legacy config ${configPath} must be a JSON object.`,
-      };
-    }
-    if ('enabled' in parsed) {
-      if (typeof parsed.enabled === 'boolean') {
-        return { config: { enabled: parsed.enabled }, recognized: true };
-      }
-      return {
-        config: { ...DEFAULT_IMAGINE_CONFIG },
-        recognized: false,
-        warning: `Invalid ${configPath}: enabled must be a boolean.`,
-      };
-    }
-    if (parsed.scope === 'grok-cli' || parsed.scope === 'all') {
-      return { config: { enabled: true }, recognized: true };
-    }
-    return {
-      config: { ...DEFAULT_IMAGINE_CONFIG },
-      recognized: false,
-      warning: `Invalid ${configPath}: expected enabled or a recognized scope.`,
-    };
-  } catch (error) {
-    return {
-      config: { ...DEFAULT_IMAGINE_CONFIG },
-      recognized: false,
-      warning: `Could not read ${configPath}: ${errorMessage(error)}.`,
-    };
-  }
-}
-
 function parseLegacyVision(configPath: string): {
   config: VisionConfig;
   recognized: boolean;
@@ -288,24 +225,20 @@ function parseLegacyVision(configPath: string): {
 }
 
 function loadLegacyConfig(): LegacyConfig {
-  const imaginePath = getLegacyImagineConfigPath();
   const visionPath = getLegacyVisionConfigPath();
-  const imagine = existsSync(imaginePath) ? parseLegacyImagine(imaginePath) : undefined;
   const vision = existsSync(visionPath) ? parseLegacyVision(visionPath) : undefined;
   return {
     config: {
       version: CONFIG_VERSION,
-      imagine: imagine?.config ?? { ...DEFAULT_IMAGINE_CONFIG },
       vision: vision?.config ?? { ...DEFAULT_VISION_CONFIG },
     },
-    existingPaths: [imagine ? imaginePath : undefined, vision ? visionPath : undefined].filter(
+    existingPaths: [vision ? visionPath : undefined].filter(
       (path): path is string => Boolean(path),
     ),
-    recognizedPaths: [
-      imagine?.recognized ? imaginePath : undefined,
-      vision?.recognized ? visionPath : undefined,
-    ].filter((path): path is string => Boolean(path)),
-    warning: combineWarnings([imagine?.warning, vision?.warning]),
+    recognizedPaths: [vision?.recognized ? visionPath : undefined].filter(
+      (path): path is string => Boolean(path),
+    ),
+    warning: vision?.warning,
   };
 }
 

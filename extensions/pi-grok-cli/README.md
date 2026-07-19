@@ -7,7 +7,7 @@
 Use your X Premium or SuperGrok subscription in [pi](https://pi.dev/) with a clean, focused toolset.
 
 - **Vision for text-only models** — automatically describe images with a vision-capable Grok model and cache descriptions locally.
-- **Grok Imagine** — generate JPEGs from the TUI or let Grok call the `image_gen` tool, with inline previews.
+- **Grok Imagine** — generate JPEGs from the TUI with inline previews.
 - **Subscription OAuth** — sign in through a browser or device code or reuse an official Grok Build login; tokens refresh automatically.
 - **Model-scoped compatibility** — Cursor-style tool names only for Grok Build and Composer 2.5. All other models keep Pi's native tools.
 - **Usage tracking** — check account limits, remaining credits, and reset times from pi.
@@ -117,9 +117,7 @@ When `read` or `Read` returns an image to a text-only model, pi-grok-cli describ
 
 ### Grok Imagine image generation
 
-Run `/grok-cli-imagine <prompt>` to generate and preview a JPEG, or let any active model call the `image_gen` tool. Both use the current Grok CLI OAuth token and save the result under the current session or a requested output path. The command supports `--aspect`, `--out`, and `--resolution 1k`.
-
-`image_gen` is enabled by default across providers and is independent of Cursor compatibility. Use `/grok-cli-imagine:tool [on|off|status]` to manage its persisted availability without disabling the direct command.
+Run `/grok-cli-imagine <prompt>` to generate and preview a JPEG. It uses the current Grok CLI OAuth token and saves the result under the current session or a requested output path. The command supports `--aspect`, `--out`, and `--resolution 1k`.
 
 ## Commands
 
@@ -127,7 +125,6 @@ Run `/grok-cli-imagine <prompt>` to generate and preview a JPEG, or let any acti
 | --- | --- |
 | `/grok-cli-usage` | Fetch current quota, remaining credits, and reset times. |
 | `/grok-cli-imagine <prompt>` | Generate and preview an image. Supports `--aspect`, `--out`, and `--resolution 1k`. |
-| `/grok-cli-imagine:tool [on\|off\|status]` | Toggle, set, or report persistent model-callable `image_gen` availability. |
 | `/grok-cli-vision:status` | Show vision state, describer model, configuration path, and cache statistics. |
 | `/grok-cli-vision:on` / `/grok-cli-vision:off` | Enable or disable vision routing. |
 | `/grok-cli-vision:cache-clear` | Remove all cached image descriptions. |
@@ -139,9 +136,6 @@ All extension settings are read from `~/.pi/grok-cli.json`. The file is created 
 ```json
 {
   "version": 1,
-  "imagine": {
-    "enabled": true
-  },
   "vision": {
     "enabled": true,
     "model": "grok-build",
@@ -152,7 +146,7 @@ All extension settings are read from `~/.pi/grok-cli.json`. The file is created 
 }
 ```
 
-Legacy Imagine and vision settings are migrated automatically. The vision cache remains separate at `~/.pi/grok-cli-vision-cache.json`.
+Legacy vision settings are migrated automatically. The vision cache remains separate at `~/.pi/grok-cli-vision-cache.json`.
 
 `model` must identify an image-capable model. Invalid values are reported and replaced with safe defaults. Manual changes apply on the next image read.
 
