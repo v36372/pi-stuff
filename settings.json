@@ -1,16 +1,17 @@
 {
   "lastChangelogVersion": "0.80.10",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
+  "defaultProvider": "grok-cli",
+  "defaultModel": "grok-4.5",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
   "collapseChangelog": true,
   "enabledModels": [
-    "opencode-go/grok-4.5",
-    "opencode-go/kimi-k3",
+    "grok-cli/grok-4.5",
     "openai-codex/gpt-5.6-sol",
-    "openai-codex/gpt-5.6-luna"
+    "openai-codex/gpt-5.6-terra",
+    "openai-codex/gpt-5.6-luna",
+    "grok-cli/grok-composer-2.5-fast"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",

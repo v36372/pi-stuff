@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderCodeBox } from "./index";
+import { extractFencedCodeBlocks, renderCodeBox } from "./index";
 
 const theme = {
 	codeBlock: (text: string) => text,
@@ -30,4 +30,27 @@ test("bounds tall blocks with a caller-provided omission row", () => {
 
 test("uses unframed code in panes too narrow for a useful box", () => {
 	expect(renderCodeBox("a\nb", "js", 7, theme)).toEqual(["a", "b"]);
+});
+
+test("extracts fenced code bodies without fences or language tags", () => {
+	const markdown = [
+		"Intro text",
+		"```ts",
+		"const x = 1;",
+		"```",
+		"",
+		"More text",
+		"~~~python",
+		"print('hi')",
+		"~~~",
+	].join("\n");
+
+	expect(extractFencedCodeBlocks(markdown)).toEqual([
+		"const x = 1;",
+		"print('hi')",
+	]);
+});
+
+test("returns no blocks when the message has no fences", () => {
+	expect(extractFencedCodeBlocks("just prose and `inline` code")).toEqual([]);
 });

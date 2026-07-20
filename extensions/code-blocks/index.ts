@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 import {
 	Markdown,
 	truncateToWidth,
@@ -323,6 +324,50 @@ class CodeBlockHost implements Component {
 	}
 }
 
+/** Extract raw fenced code bodies from markdown text (no fences, no UI borders). */
+export function extractFencedCodeBlocks(markdown: string): string[] {
+	const blocks: string[] = [];
+	// Match ``` or ~~~ fences; capture body only. Language tags are ignored.
+	const fenceRe = new RegExp("^(?:`{3,}|~{3,})[^\\n]*\\n([\\s\\S]*?)^(?:`{3,}|~{3,})\\s*$", "gm");
+	let match: RegExpExecArray | null;
+	while ((match = fenceRe.exec(markdown)) !== null) {
+		const body = match[1] ?? "";
+		// Preserve exact body content, including trailing newline before closing fence.
+		blocks.push(body.replace(/\n$/, ""));
+	}
+	return blocks;
+}
+
+function lastAssistantText(ctx: { sessionManager: { getBranch: () => Array<{ type: string; message?: { role?: string; content?: unknown; stopReason?: string } }> } }): string | undefined {
+	const branch = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
+		const msg = entry.message;
+		if (msg.stopReason === "aborted" && (!Array.isArray(msg.content) || msg.content.length === 0)) {
+			continue;
+		}
+		const content = msg.content;
+		if (!Array.isArray(content)) return undefined;
+		let text = "";
+		for (const block of content) {
+			if (
+				typeof block === "object" &&
+				block !== null &&
+				"type" in block &&
+				(block as { type: string }).type === "text" &&
+				"text" in block &&
+				typeof (block as { text: unknown }).text === "string"
+			) {
+				text += (block as { text: string }).text;
+			}
+		}
+		const trimmed = text.trim();
+		return trimmed || undefined;
+	}
+	return undefined;
+}
+
 export default function (pi: ExtensionAPI) {
 	let host: CodeBlockHost | undefined;
 
@@ -330,6 +375,49 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setWidget(HOST_KEY, undefined);
 		host = undefined;
 	};
+
+	const copyLastCodeBlocks = async (ctx: any) => {
+		const text = lastAssistantText(ctx);
+		if (!text) {
+			ctx.ui.notify("No agent messages to copy yet.", "warning");
+			return;
+		}
+
+		const blocks = extractFencedCodeBlocks(text);
+		if (blocks.length === 0) {
+			ctx.ui.notify("No code blocks in the last agent message.", "warning");
+			return;
+		}
+
+		// Raw code only — borders are pure render chrome from this extension.
+		const payload = blocks.join("\n\n");
+		try {
+			await copyToClipboard(payload);
+			const n = blocks.length;
+			ctx.ui.notify(
+				n === 1 ? "Copied 1 code block" : `Copied ${n} code blocks`,
+				"info",
+			);
+		} catch (error) {
+			ctx.ui.notify(
+				error instanceof Error ? error.message : String(error),
+				"error",
+			);
+		}
+	};
+
+	// Cmd+X on macOS. Pi's key id for the Command key is "super", not "cmd".
+	pi.registerShortcut("super+x", {
+		description: "Copy all code blocks from the last agent message",
+		handler: copyLastCodeBlocks,
+	});
+
+	pi.registerCommand("copy-code", {
+		description: "Copy all code blocks from the last agent message",
+		handler: async (_args, ctx) => {
+			await copyLastCodeBlocks(ctx);
+		},
+	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
