@@ -1158,6 +1158,72 @@ export default function (pi: ExtensionAPI) {
     return { percentage: (contextTokens / contextWindow) * 100, used: contextTokens, total: contextWindow };
   }
 
+  /** Session totals matching pi's default footer style: ↑50k ↓14k R340k CH90.1% $0.357 */
+  function getSessionStats(ctx: any): {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: number;
+    cacheHitRate?: number;
+  } {
+    let input = 0;
+    let output = 0;
+    let cacheRead = 0;
+    let cacheWrite = 0;
+    let cost = 0;
+    let cacheHitRate: number | undefined;
+
+    try {
+      for (const entry of ctx.sessionManager.getEntries()) {
+        if (entry.type !== "message") continue;
+        const message = entry.message;
+        if (message?.role !== "assistant" || !message.usage) continue;
+        const usage = message.usage;
+        input += Number(usage.input) || 0;
+        output += Number(usage.output) || 0;
+        cacheRead += Number(usage.cacheRead) || 0;
+        cacheWrite += Number(usage.cacheWrite) || 0;
+        cost += Number(usage.cost?.total) || 0;
+        const promptTokens =
+          (Number(usage.input) || 0) +
+          (Number(usage.cacheRead) || 0) +
+          (Number(usage.cacheWrite) || 0);
+        cacheHitRate =
+          promptTokens > 0
+            ? ((Number(usage.cacheRead) || 0) / promptTokens) * 100
+            : undefined;
+      }
+    } catch {
+      // ignore
+    }
+
+    return { input, output, cacheRead, cacheWrite, cost, cacheHitRate };
+  }
+
+  function formatSessionTokenCount(count: number): string {
+    if (count < 1000) return count.toString();
+    if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+    if (count < 1000000) return `${Math.round(count / 1000)}k`;
+    if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+    return `${Math.round(count / 1000000)}M`;
+  }
+
+  function renderSessionStats(ctx: any, theme: any): string {
+    const stats = getSessionStats(ctx);
+    const parts: string[] = [];
+    if (stats.input) parts.push(`↑${formatSessionTokenCount(stats.input)}`);
+    if (stats.output) parts.push(`↓${formatSessionTokenCount(stats.output)}`);
+    if (stats.cacheRead) parts.push(`R${formatSessionTokenCount(stats.cacheRead)}`);
+    if (stats.cacheWrite) parts.push(`W${formatSessionTokenCount(stats.cacheWrite)}`);
+    if ((stats.cacheRead > 0 || stats.cacheWrite > 0) && stats.cacheHitRate !== undefined) {
+      parts.push(`CH${stats.cacheHitRate.toFixed(1)}%`);
+    }
+    if (stats.cost) parts.push(`$${stats.cost.toFixed(3)}`);
+    if (parts.length === 0) return "";
+    return theme.fg("dim", parts.join(" "));
+  }
+
   // Track usage state for rendering
   let latestUsage: UsageSnapshot | null = null;
   let activeProvider: string | null = null; // internal provider key for the current model
@@ -1298,9 +1364,12 @@ export default function (pi: ExtensionAPI) {
           if (branchStr) locationVariants.push(branchStr);
           const locationBlock = locationVariants.length > 0 ? fitFooterSegment(width, locationVariants) : "";
 
+          const sessionStats = renderSessionStats(ctx, theme);
+
           const statusBlocks = [
             locationBlock,
             fitFooterSegment(width, modelStr === plainModelStr ? [plainModelStr] : [modelStr, plainModelStr]),
+            sessionStats,
             fitFooterSegment(width, [
               renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
                 barWidth: CTX_GAUGE_WIDTH,
@@ -1340,6 +1409,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("turn_end", async () => {
     refreshGitFooter();
+    // Session token/cost stats change every turn even when git is unchanged.
+    tuiRef?.requestRender();
   });
 
   // Refresh when model changes — fetch immediately, restart timer

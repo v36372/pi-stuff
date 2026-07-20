@@ -23,6 +23,10 @@ const CONFIRM_COMMAND_PATTERNS = [
     name: "gh pull request create",
     pattern: ghCommandPattern("pr\\s+create"),
   },
+  {
+    name: "gh merge pull request",
+    pattern: ghCommandPattern("api"),
+  },
 ] as const;
 
 const BLOCKED_COMMAND_PATTERNS = [
@@ -47,10 +51,6 @@ const BLOCKED_COMMAND_PATTERNS = [
   {
     name: "git lfs push",
     pattern: /(^|[^\w.-])git\s+lfs\s+push(?=$|[^\w.-])/i,
-  },
-  {
-    name: "gh api",
-    pattern: ghCommandPattern("api"),
   },
   {
     name: "gh agent task write",

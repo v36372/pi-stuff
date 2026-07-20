@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+const loadSkillsMock = vi.fn(() => ({ skills: [], diagnostics: [] }));
+
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   VERSION: "0.80.6",
   getAgentDir: () => "/tmp/pi-agent",
+  loadSkills: (...args: unknown[]) => loadSkillsMock(...args),
 }));
 vi.mock("@earendil-works/pi-tui", () => ({
   truncateToWidth(text: string, width: number, suffix = "") {
@@ -30,6 +33,7 @@ const {
   normalizeExtensionName,
   parseWelcomeResources,
   renderCenteredWelcome,
+  resolveModelInvocableSkills,
 } = await import("../src/index.ts");
 
 const plainTheme = {
@@ -67,6 +71,8 @@ const originalOffline = process.env.PI_OFFLINE;
 
 beforeEach(() => {
   process.env.PI_OFFLINE = "1";
+  loadSkillsMock.mockReset();
+  loadSkillsMock.mockReturnValue({ skills: [], diagnostics: [] });
 });
 
 afterEach(() => {
@@ -449,6 +455,7 @@ describe("welcome resource formatting", () => {
       {
         context: ["AGENTS.md"],
         skills: ["artifactor"],
+        modelInvocableSkills: [],
         prompts: ["/implement"],
         extensions: ["welcome-screen"],
       },
@@ -478,6 +485,67 @@ describe("welcome resource formatting", () => {
         .filter(({ color }) => color === "accent")
         .every(({ text }) => text.includes("█")),
     ).toBe(true);
+  });
+
+  test("colors model-invocable skill bullets with the theme list-bullet color", () => {
+    const colorCalls: Array<{ color: string; text: string }> = [];
+    const recordingTheme = {
+      bold: (text: string) => text,
+      fg(color: string, text: string) {
+        colorCalls.push({ color, text });
+        return text;
+      },
+    };
+
+    renderCenteredWelcome(
+      {
+        context: [],
+        skills: ["commit", "grill-me"],
+        modelInvocableSkills: ["commit"],
+        prompts: [],
+        extensions: [],
+      },
+      recordingTheme as never,
+      80,
+    );
+
+    const skillBullets = colorCalls.filter(
+      ({ text }) => text === "  • " || text === "• ",
+    );
+    expect(
+      skillBullets.some(({ color }) => color === "mdListBullet"),
+    ).toBe(true);
+    expect(skillBullets.some(({ color }) => color === "dim")).toBe(true);
+    expect(colorCalls.find(({ text }) => text === "commit")?.color).toBe(
+      "dim",
+    );
+    expect(colorCalls.find(({ text }) => text === "grill-me")?.color).toBe(
+      "dim",
+    );
+  });
+
+  test("resolveModelInvocableSkills keeps only skills without disable-model-invocation", () => {
+    loadSkillsMock.mockReturnValue({
+      skills: [
+        { name: "commit", disableModelInvocation: false },
+        { name: "grill-me", disableModelInvocation: true },
+        { name: "code-review", disableModelInvocation: false },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveModelInvocableSkills(
+        ["commit", "grill-me", "missing-skill"],
+        "/tmp/project",
+      ),
+    ).toEqual(["commit", "missing-skill"]);
+    expect(loadSkillsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/project",
+        includeDefaults: true,
+      }),
+    );
   });
 });
 

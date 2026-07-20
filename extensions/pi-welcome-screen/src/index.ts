@@ -1,10 +1,12 @@
 import {
   getAgentDir,
+  loadSkills,
   VERSION,
   type ExtensionAPI,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   type Component,
@@ -42,6 +44,11 @@ const WELCOME_SECTIONS: readonly WelcomeSection[] = [
 export interface WelcomeResources {
   context: string[];
   skills: string[];
+  /**
+   * Skill names the model may auto-invoke. Skills not listed here are
+   * user-invoked only (`disable-model-invocation: true`).
+   */
+  modelInvocableSkills?: string[];
   prompts: string[];
   extensions: string[];
   /** Extensions loaded from npm or git packages. */
@@ -410,16 +417,64 @@ function wrapPrefixed(prefix: string, text: string, width: number): string[] {
   );
 }
 
+type BulletColor = (item: string) => string;
+
+function defaultBulletColor(_item: string): string {
+  return "dim";
+}
+
+function skillBulletColor(
+  modelInvocableSkills: ReadonlySet<string>,
+): BulletColor {
+  return (item) =>
+    modelInvocableSkills.has(item) ? "mdListBullet" : "dim";
+}
+
+/**
+ * Resolve which listed skill names are model-invocable by reading skill
+ * frontmatter from Pi's default skill roots plus shared `~/.agents/skills`.
+ */
+export function resolveModelInvocableSkills(
+  skillNames: string[],
+  cwd: string,
+): string[] {
+  if (skillNames.length === 0) return [];
+
+  try {
+    const skillPaths = [
+      join(homedir(), ".agents", "skills"),
+      join(cwd, ".agents", "skills"),
+    ];
+    const { skills } = loadSkills({
+      cwd,
+      agentDir: getAgentDir(),
+      skillPaths,
+      includeDefaults: true,
+    });
+    const byName = new Map(skills.map((skill) => [skill.name, skill]));
+    const modelInvocable: string[] = [];
+    for (const name of skillNames) {
+      const skill = byName.get(name);
+      // Unresolved skills default to model-invocable (Pi's frontmatter default).
+      if (!skill || !skill.disableModelInvocation) modelInvocable.push(name);
+    }
+    return modelInvocable;
+  } catch {
+    return [...skillNames];
+  }
+}
+
 function appendSingleColumnRows(
   lines: string[],
   items: string[],
   theme: Theme,
   columnWidth: number,
+  getBulletColor: BulletColor = defaultBulletColor,
 ): void {
   for (const item of items) {
     lines.push(
       ...wrapPrefixed(
-        theme.fg("dim", "  • "),
+        theme.fg(getBulletColor(item), "  • "),
         theme.fg("dim", item),
         columnWidth,
       ),
@@ -481,6 +536,7 @@ function appendColumnRows(
   theme: Theme,
   columnWidth: number,
   sharedColumnCount?: 2 | 3,
+  getBulletColor: BulletColor = defaultBulletColor,
 ): void {
   const listWidth = Math.max(1, columnWidth - 2);
   const desiredColumns = Math.ceil(items.length / MAX_LIST_ROWS_PER_COLUMN);
@@ -497,26 +553,33 @@ function appendColumnRows(
   const columnCount = Math.min(requestedColumns, fittingColumns);
 
   if (columnCount === 1) {
-    appendSingleColumnRows(lines, items, theme, columnWidth);
+    appendSingleColumnRows(lines, items, theme, columnWidth, getBulletColor);
     return;
   }
 
   const rowsPerColumn = Math.ceil(items.length / columnCount);
   const cellWidths = getColumnWidths(listWidth, columnCount);
+  const bullet = "• ";
+  const bulletWidth = visibleWidth(bullet);
 
   for (let row = 0; row < rowsPerColumn; row += 1) {
     const cells = cellWidths.map((cellWidth, column) => {
       const item = items[column * rowsPerColumn + row];
       if (!item) return " ".repeat(cellWidth);
 
-      // truncateToWidth inserts ANSI resets around its ellipsis. Strip those
-      // because the complete row receives its muted color afterward; otherwise
-      // one truncated cell resets the color of every following column.
-      const cell = stripAnsi(truncateToWidth(`• ${item}`, cellWidth, "…"));
+      // truncateToWidth inserts ANSI resets around its ellipsis. Color the
+      // bullet and label separately so multi-column rows can mix invocable
+      // and user-only skills without one cell resetting the next.
+      const maxItemWidth = Math.max(0, cellWidth - bulletWidth);
+      const truncatedItem = stripAnsi(
+        truncateToWidth(item, maxItemWidth, "…"),
+      );
+      const cell =
+        theme.fg(getBulletColor(item), bullet) + theme.fg("dim", truncatedItem);
       return cell + " ".repeat(Math.max(0, cellWidth - visibleWidth(cell)));
     });
     const rowText = `  ${cells.join(" ".repeat(LIST_COLUMN_GAP))}`.trimEnd();
-    lines.push(theme.fg("dim", rowText));
+    lines.push(rowText);
   }
 }
 
@@ -528,6 +591,7 @@ function appendSection(
   columnWidth: number,
   singleColumn = false,
   sharedColumnCount?: 2 | 3,
+  getBulletColor: BulletColor = defaultBulletColor,
 ): void {
   if (lines.length > 0) lines.push("");
   lines.push(theme.fg("mdHeading", `[${title}]`));
@@ -537,8 +601,17 @@ function appendSection(
     return;
   }
 
-  if (singleColumn) appendSingleColumnRows(lines, body, theme, columnWidth);
-  else appendColumnRows(lines, body, theme, columnWidth, sharedColumnCount);
+  if (singleColumn)
+    appendSingleColumnRows(lines, body, theme, columnWidth, getBulletColor);
+  else
+    appendColumnRows(
+      lines,
+      body,
+      theme,
+      columnWidth,
+      sharedColumnCount,
+      getBulletColor,
+    );
 }
 
 function appendExtensionsSection(
@@ -650,6 +723,10 @@ function appendResourceSection(
       : title === "Skills"
         ? resources.skills
         : resources.prompts;
+  const getBulletColor =
+    title === "Skills"
+      ? skillBulletColor(new Set(resources.modelInvocableSkills ?? body))
+      : defaultBulletColor;
   appendSection(
     lines,
     title,
@@ -658,6 +735,7 @@ function appendResourceSection(
     columnWidth,
     title === "Context",
     title === "Skills" ? sharedColumnCount : undefined,
+    getBulletColor,
   );
 }
 
@@ -818,6 +896,7 @@ class WelcomeHeader implements Component {
     private readonly tui: TUI,
     private readonly theme: Theme,
     private readonly bridge: ResourceBridge | undefined,
+    private readonly cwd: string,
     forceInitialRender: boolean,
   ) {
     // session_start runs just before Pi populates its loaded-resource panel.
@@ -863,8 +942,14 @@ class WelcomeHeader implements Component {
     const resourcePanelIsComplete = Boolean(
       candidateResources?.extensions.some(isWelcomeScreenExtension),
     );
-    if (resourcePanelIsComplete) {
-      this.resources = candidateResources;
+    if (resourcePanelIsComplete && candidateResources) {
+      this.resources = {
+        ...candidateResources,
+        modelInvocableSkills: resolveModelInvocableSkills(
+          candidateResources.skills,
+          this.cwd,
+        ),
+      };
       this.clearRenderCache();
       this.resourceReadyTimer = undefined;
       this.tui.requestRender(forceInitialRender);
@@ -929,12 +1014,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
 
+    const cwd = ctx.cwd || process.cwd();
     ctx.ui.setHeader(
       (tui, theme) =>
         new WelcomeHeader(
           tui,
           theme,
           takeResourcePanel(tui),
+          cwd,
           event.reason === "startup",
         ),
     );

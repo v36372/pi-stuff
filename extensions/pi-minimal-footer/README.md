@@ -9,6 +9,7 @@ Minimal footer for [pi](https://github.com/earendil-works/pi) that replaces the 
 ## Features
 
 - **Context gauge** — optional working directory and git branch, model, thinking level, and context window usage with token counts
+- **Session stats** — cumulative session totals in pi's default style (`↑50k ↓14k R340k CH90.1% $0.357`)
 - **Subscription usage bars** — rolling window quotas with reset timers for supported providers
 - **Auto-refresh** — fetches usage on startup and model switch, then every 5 minutes
 - **Git integration** — branch name, dirty state, ahead/behind counts
@@ -54,7 +55,7 @@ Grok usage works with OAuth subscription providers using the `xai-auth`, `grok-c
 
 ## How it works
 
-The footer reads context usage from the last assistant message's token counts (free — comes with every LLM response). Subscription usage is fetched from each provider's dedicated quota API using your existing auth tokens from `~/.pi/agent/auth.json` or environment variables.
+The footer reads context usage from the last assistant message's token counts (free — comes with every LLM response). Session totals (`↑` input, `↓` output, `R` cache read, optional `W` cache write, `CH%` cache hit rate, `$` cost) are summed across all assistant messages in the session and appended to the status line. Subscription usage is fetched from each provider's dedicated quota API using your existing auth tokens from `~/.pi/agent/auth.json` or environment variables.
 
 Usage is fetched:
 

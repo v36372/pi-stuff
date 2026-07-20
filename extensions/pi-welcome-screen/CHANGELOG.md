@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Color model-invocable skill bullets with the theme `mdListBullet` color; keep user-only skills dim.
+- Resolve skill invocation mode from frontmatter across Pi and `~/.agents/skills` roots.
+
 ## 0.1.3
 
 - Add responsive one-, two-, and three-column welcome layouts.
