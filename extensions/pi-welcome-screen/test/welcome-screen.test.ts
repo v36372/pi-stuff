@@ -33,6 +33,8 @@ const {
   normalizeExtensionName,
   parseWelcomeResources,
   renderCenteredWelcome,
+  resolveConnectedMcpServers,
+  resolveConfiguredMcpServers,
   resolveModelInvocableSkills,
 } = await import("../src/index.ts");
 
@@ -522,6 +524,79 @@ describe("welcome resource formatting", () => {
     expect(colorCalls.find(({ text }) => text === "grill-me")?.color).toBe(
       "dim",
     );
+  });
+
+  test("renders MCP servers with highlighted dots for connected ones", () => {
+    const colorCalls: Array<{ color: string; text: string }> = [];
+    const recordingTheme = {
+      bold: (text: string) => text,
+      fg(color: string, text: string) {
+        colorCalls.push({ color, text });
+        return text;
+      },
+    };
+
+    const rendered = renderCenteredWelcome(
+      {
+        context: [],
+        skills: [],
+        prompts: [],
+        extensions: [],
+        mcpServers: ["gcloud", "wiz"],
+        connectedMcpServers: ["wiz"],
+      },
+      recordingTheme as never,
+      80,
+    ).join("\n");
+
+    expect(rendered).toContain("[MCP]");
+    expect(rendered).toContain("gcloud");
+    expect(rendered).toContain("wiz");
+
+    const bulletColors = colorCalls
+      .filter(({ text }) => text === "  • " || text === "• ")
+      .map(({ color }) => color);
+    expect(bulletColors).toContain("mdListBullet");
+    expect(bulletColors).toContain("dim");
+    expect(colorCalls.find(({ text }) => text === "[MCP]")?.color).toBe(
+      "mdHeading",
+    );
+  });
+
+  test("omits the MCP section when no servers are configured", () => {
+    const rendered = renderCenteredWelcome(
+      {
+        context: ["AGENTS.md"],
+        skills: [],
+        prompts: [],
+        extensions: [],
+        mcpServers: [],
+      },
+      plainTheme as never,
+      80,
+    ).join("\n");
+
+    expect(rendered).not.toContain("[MCP]");
+  });
+
+  test("resolveConnectedMcpServers reads the adapter welcome bridge", () => {
+    const key = "__piMcpWelcomeBridge";
+    const host = globalThis as Record<string, unknown>;
+    const previous = host[key];
+    host[key] = {
+      getServers: () => ["gcloud", "wiz"],
+      getConnected: () => ["wiz"],
+    };
+
+    try {
+      expect(resolveConnectedMcpServers()).toEqual(["wiz"]);
+      expect(resolveConfiguredMcpServers("/tmp/project")).toEqual(
+        expect.arrayContaining(["gcloud", "wiz"]),
+      );
+    } finally {
+      if (previous === undefined) delete host[key];
+      else host[key] = previous;
+    }
   });
 
   test("resolveModelInvocableSkills keeps only skills without disable-model-invocation", () => {

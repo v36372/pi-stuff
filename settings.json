@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.80.10",
-  "defaultProvider": "grok-cli",
-  "defaultModel": "grok-4.5",
+  "lastChangelogVersion": "0.81.1",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "theme": "modern-dark",
@@ -11,13 +11,14 @@
     "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-luna",
-    "grok-cli/grok-composer-2.5-fast",
-    "opencode-go/kimi-k3"
+    "grok-cli/grok-composer-2.5-fast"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
-  "extensions": [],
+  "extensions": [
+    "-extensions/pi-herdr/index.ts"
+  ],
   "enableInstallTelemetry": false,
   "packages": []
 }

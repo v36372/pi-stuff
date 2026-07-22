@@ -24,10 +24,50 @@ const CONFIRM_COMMAND_PATTERNS = [
     pattern: ghCommandPattern("pr\\s+create"),
   },
   {
-    name: "gh merge pull request",
-    pattern: ghCommandPattern("api"),
+    name: "gh pull request edit",
+    pattern: ghCommandPattern("pr\\s+edit"),
   },
 ] as const;
+
+// gh api defaults to GET, or POST when -f/-F/--input are present.
+// Only gate write-y requests so code search / read GraphQL stay silent.
+const GH_API_PATTERN = ghCommandPattern("api");
+const GH_API_METHOD_PATTERN =
+  /(?:^|\s)(?:-X|--method)(?:=|\s+)(GET|HEAD|POST|PUT|PATCH|DELETE)\b/i;
+const GH_API_BODY_PATTERN =
+  /(?:^|\s)(?:-f|--raw-field|-F|--field|--input)(?:=|\s+)/;
+const GH_API_GRAPHQL_PATTERN =
+  /(?:^|[^\w.-])graphql(?=$|[^\w.-])/i;
+// GraphQL operation type is case-sensitive in the language.
+const GH_API_GRAPHQL_MUTATION_PATTERN = /\bmutation\b/;
+
+function isGhApiSideEffect(command: string): boolean {
+  if (!GH_API_PATTERN.test(command)) return false;
+
+  const method = GH_API_METHOD_PATTERN.exec(command)?.[1]?.toUpperCase();
+  if (method === "GET" || method === "HEAD") return false;
+  if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") {
+    // GraphQL always POSTs; only mutations change state.
+    if (method === "POST" && GH_API_GRAPHQL_PATTERN.test(command)) {
+      return GH_API_GRAPHQL_MUTATION_PATTERN.test(command);
+    }
+    return true;
+  }
+
+  // No explicit method: body flags force POST.
+  if (!GH_API_BODY_PATTERN.test(command)) return false;
+
+  if (GH_API_GRAPHQL_PATTERN.test(command)) {
+    // Inline query without mutation is a read; body from file/stdin is opaque.
+    return (
+      GH_API_GRAPHQL_MUTATION_PATTERN.test(command) ||
+      /(?:^|\s)(?:--input|-f|--raw-field|-F|--field)(?:=|\s+)@/.test(command) ||
+      /(?:^|\s)--input(?:=|\s+)/.test(command)
+    );
+  }
+
+  return true;
+}
 
 const BLOCKED_COMMAND_PATTERNS = [
   {
@@ -89,7 +129,7 @@ const BLOCKED_COMMAND_PATTERNS = [
   {
     name: "gh pull request write",
     pattern: ghCommandPattern(
-      "pr\\s+(?:close|comment|new|edit|lock|merge|ready|reopen|revert|review|unlock|update-branch)",
+      "pr\\s+(?:close|comment|new|lock|merge|ready|reopen|revert|review|unlock|update-branch)",
     ),
   },
   {
@@ -139,7 +179,12 @@ function findBlockedCommand(command: string): string | undefined {
 }
 
 function findConfirmCommand(command: string): string | undefined {
-  return CONFIRM_COMMAND_PATTERNS.find(({ pattern }) => pattern.test(command))?.name;
+  const match = CONFIRM_COMMAND_PATTERNS.find(({ pattern }) =>
+    pattern.test(command),
+  )?.name;
+  if (match) return match;
+  if (isGhApiSideEffect(command)) return "gh api write";
+  return undefined;
 }
 
 export default function (pi: ExtensionAPI) {

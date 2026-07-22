@@ -3,7 +3,7 @@
  *
  *   ╭─────────────────────────╮
  *   │ › text box              │
- *   ╰────────────── name ────╯
+ *   ╰────── Model Name (high) ─╯
  */
 
 import {
@@ -52,18 +52,7 @@ function roundedEditorBorder(
 }
 
 export default function (pi: ExtensionAPI) {
-	let sessionName: string | undefined;
 	let tuiRef: { requestRender: () => void } | null = null;
-
-	const resolveName = (ctx?: ExtensionContext): string | undefined => {
-		const name =
-			(ctx ? ctx.sessionManager.getSessionName() : undefined) ||
-			pi.getSessionName() ||
-			sessionName ||
-			undefined;
-		if (name) sessionName = name;
-		return name;
-	};
 
 	const applyEditor = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
@@ -120,15 +109,13 @@ export default function (pi: ExtensionAPI) {
 				for (const line of extra) {
 					result.push(wrap(line, "│", "│", "  "));
 				}
-				const name = resolveName(ctx);
+				const modelName = ctx.model?.name || ctx.model?.id || "no model";
+				const thinkingLevel = pi.getThinkingLevel();
+				const modelStatus =
+					ctx.ui.theme.fg("muted", modelName) +
+					ctx.ui.theme.fg("dim", ` (${thinkingLevel})`);
 				result.push(
-					roundedEditorBorder(
-						width,
-						"╰",
-						"╯",
-						borderColor,
-						name ? ctx.ui.theme.fg("accent", name) : "",
-					),
+					roundedEditorBorder(width, "╰", "╯", borderColor, modelStatus),
 				);
 				return result;
 			}
@@ -140,12 +127,9 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		sessionName = ctx.sessionManager.getSessionName() ?? pi.getSessionName();
 		applyEditor(ctx);
 	});
 
-	pi.on("session_info_changed", async (event) => {
-		sessionName = event.name;
-		tuiRef?.requestRender();
-	});
+	pi.on("model_select", async () => tuiRef?.requestRender());
+	pi.on("thinking_level_select", async () => tuiRef?.requestRender());
 }

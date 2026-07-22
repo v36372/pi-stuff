@@ -1129,13 +1129,6 @@ export default function (pi: ExtensionAPI) {
     return wrapFooterSegments(segments, width, sep);
   }
 
-  function getThinkingLevel(ctx: any): string {
-    const entries = ctx.sessionManager.getEntries();
-    const leafId = ctx.sessionManager.getLeafId();
-    const context = buildSessionContext(entries, leafId);
-    return context.thinkingLevel || "off";
-  }
-
   function getContextInfo(ctx: any): { percentage: number; used: number; total: number } {
     const model = ctx.model;
     const contextWindow = model?.contextWindow ?? 0;
@@ -1343,17 +1336,6 @@ export default function (pi: ExtensionAPI) {
             if (gitCache.behind) branchStr += theme.fg("error", ` ↓${gitCache.behind}`);
           }
 
-          // Model + thinking
-          const modelName = ctx.model?.id?.split("/").pop() || "no-model";
-          const plainModelStr = theme.fg("muted", modelName);
-          let modelStr = plainModelStr;
-          if (ctx.model?.reasoning) {
-            const thinkingLevel = getThinkingLevel(ctx);
-            if (thinkingLevel !== "off") {
-              modelStr += " " + theme.fg("dim", ">") + " " + theme.fg("accent", thinkingLevel);
-            }
-          }
-
           const sep = " " + theme.fg("dim", ">") + " ";
           const lines: string[] = [];
 
@@ -1368,7 +1350,6 @@ export default function (pi: ExtensionAPI) {
 
           const statusBlocks = [
             locationBlock,
-            fitFooterSegment(width, modelStr === plainModelStr ? [plainModelStr] : [modelStr, plainModelStr]),
             sessionStats,
             fitFooterSegment(width, [
               renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {

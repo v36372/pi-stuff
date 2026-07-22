@@ -5,7 +5,7 @@ import {
   type ExtensionAPI,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,17 +28,21 @@ const RESOURCE_POLL_INTERVAL_MS = 50;
 const MAX_RESOURCE_RETRIES = 3;
 const RESOURCE_PANEL_INDEX = 1;
 const RESOURCE_BRIDGE_KEY = "__piKaushWelcomeScreenResourceBridge";
+const MCP_STATUS_BRIDGE_KEY = "__piMcpWelcomeBridge";
+const MCP_STATUS_POLL_INTERVAL_MS = 100;
+const MAX_MCP_STATUS_POLLS = 30;
 
 let cachedLocalExtensionNames: Set<string> | undefined;
 
 const PI_BANNER = ["█████████", "███   ███", "██████   ███", "███      ███"];
 
-type WelcomeSection = "Context" | "Skills" | "Prompts" | "Extensions";
+type WelcomeSection = "Context" | "Skills" | "Prompts" | "Extensions" | "MCP";
 const WELCOME_SECTIONS: readonly WelcomeSection[] = [
   "Context",
   "Skills",
   "Prompts",
   "Extensions",
+  "MCP",
 ];
 
 export interface WelcomeResources {
@@ -57,6 +61,13 @@ export interface WelcomeResources {
   sourceExtensions?: string[];
   /** @deprecated Use packageExtensions. */
   vendoredExtensions?: string[];
+  /** Configured MCP server names. */
+  mcpServers?: string[];
+  /**
+   * MCP servers currently connected. Servers not listed here render with a dim
+   * bullet (same visual language as non-model-invocable skills).
+   */
+  connectedMcpServers?: string[];
 }
 
 interface CollapsedTextComponent extends Component {
@@ -430,6 +441,98 @@ function skillBulletColor(
     modelInvocableSkills.has(item) ? "mdListBullet" : "dim";
 }
 
+function mcpBulletColor(connectedServers: ReadonlySet<string>): BulletColor {
+  return (item) => (connectedServers.has(item) ? "mdListBullet" : "dim");
+}
+
+interface McpWelcomeBridge {
+  getServers?: () => string[];
+  getConnected?: () => string[];
+  getStatuses?: () => Map<string, boolean> | Record<string, boolean>;
+}
+
+function getMcpWelcomeBridge(): McpWelcomeBridge | undefined {
+  const bridge = (globalThis as Record<string, unknown>)[MCP_STATUS_BRIDGE_KEY];
+  if (!bridge || typeof bridge !== "object") return undefined;
+  return bridge as McpWelcomeBridge;
+}
+
+function readMcpServerNamesFromConfig(path: string): string[] {
+  try {
+    if (!existsSync(path)) return [];
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    const servers = raw.mcpServers ?? raw["mcp-servers"];
+    if (!servers || typeof servers !== "object" || Array.isArray(servers))
+      return [];
+    return Object.keys(servers as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Resolve configured MCP server names from the same shared config locations
+ * pi-mcp-adapter reads, plus any live bridge published by the adapter.
+ */
+export function resolveConfiguredMcpServers(cwd: string): string[] {
+  const names = new Set<string>();
+  const paths = [
+    join(homedir(), ".config", "mcp", "mcp.json"),
+    join(getAgentDir(), "mcp.json"),
+    join(cwd, ".mcp.json"),
+    join(cwd, ".pi", "mcp.json"),
+  ];
+  for (const path of paths) {
+    for (const name of readMcpServerNamesFromConfig(path)) names.add(name);
+  }
+
+  const bridge = getMcpWelcomeBridge();
+  if (typeof bridge?.getServers === "function") {
+    for (const name of bridge.getServers()) {
+      if (name) names.add(name);
+    }
+  }
+
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
+
+/** Resolve currently connected MCP server names from the adapter bridge. */
+export function resolveConnectedMcpServers(): string[] {
+  const bridge = getMcpWelcomeBridge();
+  if (!bridge) return [];
+
+  if (typeof bridge.getConnected === "function") {
+    return unique(bridge.getConnected().filter(Boolean)).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+
+  if (typeof bridge.getStatuses === "function") {
+    const statuses = bridge.getStatuses();
+    const connected =
+      statuses instanceof Map
+        ? [...statuses.entries()]
+            .filter(([, isConnected]) => isConnected)
+            .map(([name]) => name)
+        : Object.entries(statuses)
+            .filter(([, isConnected]) => isConnected)
+            .map(([name]) => name);
+    return unique(connected.filter(Boolean)).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+
+  return [];
+}
+
+function sameStringList(left: string[] | undefined, right: string[]): boolean {
+  if (!left || left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 /**
  * Resolve which listed skill names are model-invocable by reading skill
  * frontmatter from Pi's default skill roots plus shared `~/.agents/skills`.
@@ -717,6 +820,22 @@ function appendResourceSection(
     return;
   }
 
+  if (title === "MCP") {
+    const servers = resources.mcpServers ?? [];
+    if (servers.length === 0) return;
+    appendSection(
+      lines,
+      title,
+      servers,
+      theme,
+      columnWidth,
+      false,
+      undefined,
+      mcpBulletColor(new Set(resources.connectedMcpServers ?? [])),
+    );
+    return;
+  }
+
   const body =
     title === "Context"
       ? resources.context
@@ -761,8 +880,8 @@ function renderResourceColumn(
 type WelcomeGridItem = "Brand" | WelcomeSection;
 
 const GRID_COLUMNS: Record<2 | 3, readonly (readonly WelcomeGridItem[])[]> = {
-  2: [["Context", "Skills", "Prompts"], ["Extensions"]],
-  3: [["Brand"], ["Context", "Skills", "Prompts"], ["Extensions"]],
+  2: [["Context", "Skills", "Prompts"], ["Extensions", "MCP"]],
+  3: [["Brand"], ["Context", "Skills", "Prompts"], ["Extensions", "MCP"]],
 };
 
 function renderGridItem(
@@ -887,6 +1006,7 @@ export function renderCenteredWelcome(
 
 class WelcomeHeader implements Component {
   private resourceReadyTimer: ReturnType<typeof setTimeout> | undefined;
+  private mcpStatusTimer: ReturnType<typeof setTimeout> | undefined;
   private resources: WelcomeResources | undefined;
   private cachedWidth: number | undefined;
   private cachedLines: string[] | undefined;
@@ -949,9 +1069,12 @@ class WelcomeHeader implements Component {
           candidateResources.skills,
           this.cwd,
         ),
+        mcpServers: resolveConfiguredMcpServers(this.cwd),
+        connectedMcpServers: resolveConnectedMcpServers(),
       };
       this.clearRenderCache();
       this.resourceReadyTimer = undefined;
+      this.startMcpStatusPolling();
       this.tui.requestRender(forceInitialRender);
       return;
     }
@@ -973,9 +1096,43 @@ class WelcomeHeader implements Component {
 
   private showNativePanel(forceRender: boolean): void {
     this.resourceReadyTimer = undefined;
+    if (this.mcpStatusTimer) clearTimeout(this.mcpStatusTimer);
+    this.mcpStatusTimer = undefined;
     restoreResourcePanel(this.tui, this.bridge);
     this.clearRenderCache();
     this.tui.requestRender(forceRender);
+  }
+
+  private startMcpStatusPolling(attempt = 0): void {
+    if (this.disposed || !this.resources) return;
+
+    const mcpServers = resolveConfiguredMcpServers(this.cwd);
+    const connectedMcpServers = resolveConnectedMcpServers();
+    const serversChanged = !sameStringList(this.resources.mcpServers, mcpServers);
+    const connectedChanged = !sameStringList(
+      this.resources.connectedMcpServers,
+      connectedMcpServers,
+    );
+
+    if (serversChanged || connectedChanged) {
+      this.resources = {
+        ...this.resources,
+        mcpServers,
+        connectedMcpServers,
+      };
+      this.clearRenderCache();
+      this.tui.requestRender(false);
+    }
+
+    if (attempt + 1 >= MAX_MCP_STATUS_POLLS) {
+      this.mcpStatusTimer = undefined;
+      return;
+    }
+
+    this.mcpStatusTimer = setTimeout(
+      () => this.startMcpStatusPolling(attempt + 1),
+      MCP_STATUS_POLL_INTERVAL_MS,
+    );
   }
 
   private clearRenderCache(): void {
@@ -1006,6 +1163,7 @@ class WelcomeHeader implements Component {
     if (this.disposed) return;
     this.disposed = true;
     if (this.resourceReadyTimer) clearTimeout(this.resourceReadyTimer);
+    if (this.mcpStatusTimer) clearTimeout(this.mcpStatusTimer);
     restoreResourcePanel(this.tui, this.bridge);
   }
 }

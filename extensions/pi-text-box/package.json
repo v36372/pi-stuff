@@ -1,7 +1,7 @@
 {
 	"name": "pi-statusline",
-	"version": "0.1.2",
-	"description": "Rounded pi editor text box with › prompt and bottom-right session name",
+	"version": "0.2.0",
+	"description": "Rounded pi editor text box with › prompt and bottom-right model status",
 	"type": "module",
 	"pi": {
 		"extensions": [
