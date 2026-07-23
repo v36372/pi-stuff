@@ -4,7 +4,7 @@
   "defaultModel": "grok-4.5",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
-  "theme": "modern-dark",
+  "theme": "catppuccin-macchiato",
   "collapseChangelog": true,
   "enabledModels": [
     "grok-cli/grok-4.5",

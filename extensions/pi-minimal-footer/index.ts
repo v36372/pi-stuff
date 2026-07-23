@@ -1054,6 +1054,32 @@ export default function (pi: ExtensionAPI) {
     return lines;
   }
 
+  function alignFooterRight(line: string, width: number): string {
+    const safeWidth = Math.max(1, width);
+    const fitted = truncateToWidth(line, safeWidth);
+    return " ".repeat(Math.max(0, safeWidth - visibleWidth(fitted))) + fitted;
+  }
+
+  function appendRightAlignedSegment(lines: string[], variants: string[], width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const result = [...lines];
+    const left = result.pop() ?? "";
+    const leftWidth = visibleWidth(left);
+    const inline = variants.find(
+      (variant) => visibleWidth(variant) <= safeWidth && (!left || leftWidth + 1 + visibleWidth(variant) <= safeWidth)
+    );
+
+    if (inline) {
+      const padding = " ".repeat(Math.max(0, safeWidth - leftWidth - visibleWidth(inline)));
+      result.push(left + padding + inline);
+      return result;
+    }
+
+    if (left) result.push(left);
+    result.push(alignFooterRight(fitFooterSegment(safeWidth, variants), safeWidth));
+    return result;
+  }
+
   function renderContextGauge(
     percentage: number,
     theme: any,
@@ -1126,7 +1152,7 @@ export default function (pi: ExtensionAPI) {
       );
     }
 
-    return wrapFooterSegments(segments, width, sep);
+    return wrapFooterSegments(segments, width, sep).map((line) => alignFooterRight(line, width));
   }
 
   function getContextInfo(ctx: any): { percentage: number; used: number; total: number } {
@@ -1348,34 +1374,31 @@ export default function (pi: ExtensionAPI) {
 
           const sessionStats = renderSessionStats(ctx, theme);
 
-          const statusBlocks = [
-            locationBlock,
-            sessionStats,
-            fitFooterSegment(width, [
-              renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
-                barWidth: CTX_GAUGE_WIDTH,
-                includeCounts: true,
-              }),
-              renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
-                barWidth: 10,
-                includeCounts: false,
-              }),
-              renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
-                barWidth: 8,
-                includeCounts: false,
-              }),
-              renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
-                barWidth: 6,
-                includeCounts: false,
-              }),
-              renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
-                barWidth: 4,
-                includeCounts: false,
-              }),
-            ]),
+          const contextVariants = [
+            renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
+              barWidth: CTX_GAUGE_WIDTH,
+              includeCounts: true,
+            }),
+            renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
+              barWidth: 10,
+              includeCounts: false,
+            }),
+            renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
+              barWidth: 8,
+              includeCounts: false,
+            }),
+            renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
+              barWidth: 6,
+              includeCounts: false,
+            }),
+            renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
+              barWidth: 4,
+              includeCounts: false,
+            }),
           ];
+          const statusLines = wrapFooterSegments([locationBlock, sessionStats], width, sep);
 
-          lines.push(...wrapFooterSegments(statusBlocks, width, sep));
+          lines.push(...appendRightAlignedSegment(statusLines, contextVariants, width));
 
           if (latestUsage && latestUsage.windows.length > 0) {
             lines.push(...renderUsageLine(latestUsage, width, theme));
