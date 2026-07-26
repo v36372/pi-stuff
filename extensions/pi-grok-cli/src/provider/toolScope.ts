@@ -1,4 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { loadConfig } from '../config.js';
+import { isGrokCliProvider } from './accounts.js';
 
 export const SHIM_MODEL_IDS = new Set(['grok-build', 'grok-composer-2.5-fast']);
 
@@ -41,6 +43,7 @@ type ToolModel = {
 
 type SyncOptions = {
   captureDelete?: boolean;
+  imagineEnabled?: boolean;
   webSearchRegistered?: boolean;
 };
 
@@ -60,7 +63,7 @@ const toolScopeHandoffs: ToolScopeHandoffStore = globalToolScope.__piGrokCliTool
 globalToolScope.__piGrokCliToolScopeHandoffs = toolScopeHandoffs;
 
 function isLegacyModel(model: ToolModel | undefined) {
-  return model?.provider === 'grok-cli' && SHIM_MODEL_IDS.has(model.id);
+  return isGrokCliProvider(model?.provider) && SHIM_MODEL_IDS.has(model?.id ?? '');
 }
 
 function sameTools(currentTools: string[], nextTools: string[]) {
@@ -119,6 +122,7 @@ export function syncGrokTools(
     legacy: false,
   };
   const legacy = isLegacyModel(model);
+  const imagineEnabled = options.imagineEnabled ?? loadConfig().config.imagine.enabled;
   const groups = options.webSearchRegistered ? [...TOOL_GROUPS, WEB_SEARCH_GROUP] : TOOL_GROUPS;
   const registeredTools = new Set(pi.getAllTools().map((tool) => tool.name));
   const registeredCompatibilityTools = groups.flatMap((group) =>
@@ -154,6 +158,7 @@ export function syncGrokTools(
 
   const handledGroups = new Set<(typeof groups)[number]>();
   const nextTools = currentTools.flatMap((toolName) => {
+    if (toolName === 'image_gen') return imagineEnabled ? [toolName] : [];
     if (toolName === 'Delete') return legacy && state.deleteEnabled ? [toolName] : [];
 
     const group = groups.find(
@@ -203,6 +208,10 @@ export function syncGrokTools(
   ) {
     nextTools.push('Delete');
   }
+  if (imagineEnabled && registeredTools.has('image_gen') && !nextTools.includes('image_gen')) {
+    nextTools.push('image_gen');
+  }
+
   state.initialized = model !== undefined;
   state.legacy = legacy;
   toolScopeStates.set(key, state);

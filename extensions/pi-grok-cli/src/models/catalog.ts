@@ -58,7 +58,7 @@ const FALLBACK_MODELS: GrokCliModelConfig[] = [
     reasoning: true,
     input: ['text', 'image'],
     cost: COST_BUILD,
-    contextWindow: 512_000,
+    contextWindow: 500_000,
     maxTokens: 30_000,
   },
   {
@@ -78,12 +78,6 @@ const FALLBACK_MODELS: GrokCliModelConfig[] = [
     cost: COST_45,
     contextWindow: 500_000,
     maxTokens: 30_000,
-    // Grok 4.5 supports reasoning effort except for the off/minimal values.
-    // Mapping off to null prevents pi-ai from sending the rejected `none` value.
-    thinkingLevelMap: {
-      off: null,
-      minimal: null,
-    },
   },
   {
     id: 'grok-4.20-0309-reasoning',
@@ -124,19 +118,27 @@ const FALLBACK_MODELS: GrokCliModelConfig[] = [
 
 const EFFORT_CAPABLE_PREFIXES = ['grok-3-mini', 'grok-4.20-multi-agent', 'grok-4.3', 'grok-4.5'];
 
+const normalizedModelName = (modelId: string) =>
+  (modelId.split('/').at(-1) ?? modelId).toLowerCase();
+
+const modelConfig = (modelId: string) => {
+  const name = normalizedModelName(modelId);
+  return resolveModels().find((entry) => entry.id.toLowerCase() === name);
+};
+
+export function supportsReasoning(modelId: string): boolean {
+  return modelConfig(modelId)?.reasoning ?? true;
+}
+
 export function supportsReasoningEffort(modelId: string): boolean {
-  const parts = modelId.split('/');
-  const name = parts.at(-1) ?? modelId;
-  const model = resolveModels().find((entry) => entry.id.toLowerCase() === name.toLowerCase());
-  if (!EFFORT_CAPABLE_PREFIXES.some((prefix) => name.toLowerCase().startsWith(prefix))) {
+  const name = normalizedModelName(modelId);
+  const model = modelConfig(modelId);
+  if (!EFFORT_CAPABLE_PREFIXES.some((prefix) => name.startsWith(prefix))) {
     return false;
   }
   if (!model?.reasoning) return false;
   if (!model.thinkingLevelMap) return true;
-  return ['low', 'medium', 'high', 'xhigh'].some((level) => {
-    const mapped = model.thinkingLevelMap?.[level];
-    return mapped === undefined || (mapped !== null && mapped !== 'none');
-  });
+  return Object.values(model.thinkingLevelMap).some((level) => level !== null && level !== 'none');
 }
 
 // ─── PI_GROK_CLI_MODELS env override ──────────────────────────────────────────
