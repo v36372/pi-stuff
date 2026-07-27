@@ -12,16 +12,19 @@
  *   render.ts      ← palette + shortPath
  *   file-tools.ts  ← read/write/edit/grep/find/ls restylers
  *   bash.ts        ← bash restyler + bounded output
- *   exploration.ts ← groups consecutive read/list/search calls
+ *   exploration.ts     ← groups consecutive read/list/search calls
+ *   codex-tool-scope.ts ← hides native-name tools from Codex adapter requests
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fileTools from "./file-tools.js";
 import bash from "./bash.js";
 import exploration from "./exploration.js";
+import codexToolScope from "./codex-tool-scope.js";
 
 export default function betterNativePi(pi: ExtensionAPI) {
 	fileTools(pi);
 	bash(pi);
 	exploration(pi);
+	codexToolScope(pi);
 }

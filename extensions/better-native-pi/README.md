@@ -59,7 +59,8 @@ better-native-pi/
 ├── core.ts        block builder + summarize + reasoning (re-exports)
 ├── file-tools.ts  read/write/edit/grep/find/ls restylers
 ├── bash.ts        bash restyler + bounded output (+stats)
-└── exploration.ts groups consecutive read/list/search calls
+├── exploration.ts groups consecutive read/list/search calls
+└── codex-tool-scope.ts removes native-name tools while Codex adapter is active
 ```
 
 ## Observability
@@ -73,3 +74,8 @@ volatile-render churn for both.
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/), [`image-store`](../image-store/).
 - **Used by extensions:** [`background-jobs`](../background-jobs/), [`web-search`](../web-search/).
+
+When used with `pi-codex-conversion-lite`, load this directory as a local Pi
+package after the conversion package. Its Codex tool scope removes all seven
+native-name overrides—including `grep`, `find`, and `ls`—from both the generated
+system prompt and callable tool schemas while the Codex adapter is active.

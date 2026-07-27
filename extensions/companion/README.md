@@ -7,7 +7,7 @@ A cursor-following floating status pill that shows what your pi agents are doing
 ## What It Does
 
 - Shows a translucent pill near your cursor with agent status (thinking, reading, editing, running, searching)
-- Shows a neutral white-glowing cat and **NEEDS YOU** status when the agent calls `ask_user` / `ask_user_question`
+- Shows a neutral white-glowing cat and **NEEDS YOU** status when the agent calls `ask`
 - Displays the current file, command, or pending question
 - Shows elapsed time and context usage percentage
 - Supports multiple concurrent pi sessions
