@@ -1,6 +1,9 @@
 # pi-minimal-footer
 
-Minimal footer for [pi](https://github.com/earendil-works/pi) that replaces the default footer with a compact two-line display: context gauge on top, subscription usage bars below.
+Minimal footer for [pi](https://github.com/earendil-works/pi) that replaces the default footer with a compact two-line display:
+
+1. **Left:** CWD, git branch, session title · **Right:** context gauge
+2. **Left:** session token/cost stats · **Right:** subscription usage bars
 
 ![Claude Max](assets/claude.png)
 
@@ -9,6 +12,7 @@ Minimal footer for [pi](https://github.com/earendil-works/pi) that replaces the 
 ## Features
 
 - **Context gauge** — optional working directory and git branch, model, thinking level, and context window usage with token counts
+- **Session title** — display name from `auto-session-name` / `/name`, on the first row after CWD/git
 - **Session stats** — cumulative session totals in pi's default style (`↑50k ↓14k R340k CH90.1% $0.357`)
 - **Subscription usage bars** — rolling window quotas with reset timers for supported providers
 - **Auto-refresh** — fetches usage on startup and model switch, then every 5 minutes
@@ -42,6 +46,7 @@ Environment variables (all optional):
 | ------------------------------- | -------------------------------------------------------- | ------- |
 | `PI_MINIMAL_FOOTER_SHOW_CWD`    | Show current working directory in footer status line     | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_BRANCH` | Show git branch/dirty/ahead/behind in footer status line | `1`     |
+| `PI_MINIMAL_FOOTER_SHOW_TITLE`  | Show session display name on the row under CWD           | `1`     |
 | `OPENCODE_GO_WORKSPACE_ID`       | OpenCode Go workspace ID (`wrk_...`)                     | —       |
 | `OPENCODE_GO_AUTH_COOKIE`        | OpenCode dashboard `auth` cookie                         | —       |
 | `GROK_CLI_OAUTH_TOKEN`           | Optional Grok OAuth bearer override                      | —       |

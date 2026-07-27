@@ -1005,6 +1005,7 @@ export default function (pi: ExtensionAPI) {
   // Optional visibility toggles (default: enabled)
   const showCwd = parseBooleanEnv(process.env.PI_MINIMAL_FOOTER_SHOW_CWD, true);
   const showBranch = parseBooleanEnv(process.env.PI_MINIMAL_FOOTER_SHOW_BRANCH, true);
+  const showTitle = parseBooleanEnv(process.env.PI_MINIMAL_FOOTER_SHOW_TITLE, true);
 
   function formatTokenCount(tokens: number): string {
     if (tokens >= 1_000_000) {
@@ -1133,7 +1134,7 @@ export default function (pi: ExtensionAPI) {
     return `${dim(window.label)} ${bar} ${pct}${timeStr}`;
   }
 
-  function renderUsageLine(usage: UsageSnapshot, width: number, theme: any): string[] {
+  function renderUsageSegments(usage: UsageSnapshot, width: number, theme: any): string[] {
     if (!usage.windows.length) return [];
 
     const dim = (s: string) => theme.fg("dim", s);
@@ -1152,7 +1153,41 @@ export default function (pi: ExtensionAPI) {
       );
     }
 
-    return wrapFooterSegments(segments, width, sep).map((line) => alignFooterRight(line, width));
+    return wrapFooterSegments(segments, width, sep);
+  }
+
+  function renderUsageLine(usage: UsageSnapshot, width: number, theme: any): string[] {
+    return renderUsageSegments(usage, width, theme).map((line) => alignFooterRight(line, width));
+  }
+
+  /** Compact single-line usage variants for right-aligning beside other left content. */
+  function renderUsageInlineVariants(usage: UsageSnapshot, width: number, theme: any): string[] {
+    if (!usage.windows.length) return [];
+
+    const dim = (s: string) => theme.fg("dim", s);
+    const sep = " " + dim(">") + " ";
+    const provider = theme.fg("accent", usage.provider);
+    const windowsFull = usage.windows.map((w) =>
+      fitFooterSegment(width, [
+        renderUsageWindow(w, theme, { barWidth: 10, includeReset: true }),
+        renderUsageWindow(w, theme, { barWidth: 8, includeReset: true }),
+        renderUsageWindow(w, theme, { barWidth: 8, includeReset: false }),
+        renderUsageWindow(w, theme, { barWidth: 6, includeReset: false }),
+        renderUsageWindow(w, theme, { barWidth: 4, includeReset: false }),
+      ]),
+    );
+    const windowsShort = usage.windows.map((w) =>
+      fitFooterSegment(width, [
+        renderUsageWindow(w, theme, { barWidth: 6, includeReset: false }),
+        renderUsageWindow(w, theme, { barWidth: 4, includeReset: false }),
+      ]),
+    );
+
+    return [
+      [provider, ...windowsFull].join(sep),
+      [provider, ...windowsShort].join(sep),
+      provider,
+    ];
   }
 
   function getContextInfo(ctx: any): { percentage: number; used: number; total: number } {
@@ -1366,11 +1401,35 @@ export default function (pi: ExtensionAPI) {
           const lines: string[] = [];
 
           const pwdStr = showCwd ? theme.fg("accent", pwd) : "";
+
+          let titleStr = "";
+          if (showTitle) {
+            const sessionTitle =
+              (typeof ctx.sessionManager?.getSessionName === "function"
+                ? ctx.sessionManager.getSessionName()
+                : undefined) ||
+              (typeof pi.getSessionName === "function" ? pi.getSessionName() : undefined);
+            if (sessionTitle?.trim()) {
+              titleStr = theme.fg("muted", sessionTitle.trim());
+            }
+          }
+
+          // Row 1 left: CWD > git > auto-title (drop pieces as width shrinks).
+          const locationPieces = [pwdStr, branchStr, titleStr].filter(Boolean);
           const locationVariants: string[] = [];
-          if (pwdStr && branchStr) locationVariants.push(pwdStr + sep + branchStr);
-          if (pwdStr) locationVariants.push(pwdStr);
-          if (branchStr) locationVariants.push(branchStr);
-          const locationBlock = locationVariants.length > 0 ? fitFooterSegment(width, locationVariants) : "";
+          if (locationPieces.length === 3) {
+            locationVariants.push(locationPieces.join(sep));
+            locationVariants.push([locationPieces[0], locationPieces[1]].join(sep));
+            locationVariants.push([locationPieces[0], locationPieces[2]].join(sep));
+          } else if (locationPieces.length === 2) {
+            locationVariants.push(locationPieces.join(sep));
+            locationVariants.push(locationPieces[0]!);
+            locationVariants.push(locationPieces[1]!);
+          } else if (locationPieces.length === 1) {
+            locationVariants.push(locationPieces[0]!);
+          }
+          const locationBlock =
+            locationVariants.length > 0 ? fitFooterSegment(width, locationVariants) : "";
 
           const sessionStats = renderSessionStats(ctx, theme);
 
@@ -1396,11 +1455,24 @@ export default function (pi: ExtensionAPI) {
               includeCounts: false,
             }),
           ];
-          const statusLines = wrapFooterSegments([locationBlock, sessionStats], width, sep);
 
-          lines.push(...appendRightAlignedSegment(statusLines, contextVariants, width));
+          // Row 1: CWD > git > title (left), context gauge (right).
+          if (locationBlock) {
+            lines.push(...appendRightAlignedSegment([locationBlock], contextVariants, width));
+          } else {
+            lines.push(...appendRightAlignedSegment([""], contextVariants, width));
+          }
 
-          if (latestUsage && latestUsage.windows.length > 0) {
+          // Row 2: session token/cost stats (left), subscription usage (right).
+          const usageVariants =
+            latestUsage && latestUsage.windows.length > 0
+              ? renderUsageInlineVariants(latestUsage, width, theme)
+              : [];
+          if (sessionStats && usageVariants.length > 0) {
+            lines.push(...appendRightAlignedSegment([sessionStats], usageVariants, width));
+          } else if (sessionStats) {
+            lines.push(truncateToWidth(sessionStats, width));
+          } else if (latestUsage && latestUsage.windows.length > 0) {
             lines.push(...renderUsageLine(latestUsage, width, theme));
           }
 
@@ -1409,6 +1481,11 @@ export default function (pi: ExtensionAPI) {
       };
     });
 
+  });
+
+  pi.on("session_info_changed", () => {
+    // auto-session-name / /name update the display name outside turn_end.
+    tuiRef?.requestRender();
   });
 
   pi.on("turn_end", async () => {
