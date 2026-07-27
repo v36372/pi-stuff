@@ -12,7 +12,5 @@
 !extensions/**
 !prompts
 !prompts/**
-!themes
-!themes/**
 !intercepted-commands
 !intercepted-commands/**
