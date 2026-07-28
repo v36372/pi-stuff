@@ -8,6 +8,8 @@ sessions without blocking the agent or losing track of child processes.
 - `bash` — the single default command tool
   - quick commands return their final output normally
   - commands still running after `yield-time_ms` return a terminal ID
+  - omitting `timeout` sets no hard deadline; yielded commands keep running until completion, an explicit stop, or session shutdown
+  - an explicit integer `timeout` from 1 to 86,400 seconds enforces a hard deadline
   - `tty: true` allocates a PTY for prompts, REPLs, watch processes, and control characters
 - `terminal_write` — write characters to a yielded terminal or poll with empty input
 - `job_output` — read only output produced since the previous cursor
@@ -17,6 +19,16 @@ The three terminal-control tools are registered but initially inactive, keeping
 their schemas out of ordinary requests. The first yielded `bash` call activates
 them additively for the rest of the session, and its result names the newly
 available tools and terminal ID.
+
+The extension provides its own managed `bash` when loaded independently. When
+`better-native-pi` is also loaded, that extension owns the single combined
+`bash` definition and refreshes it as soon as the managed terminal service is
+available. Both load orders expose the same schema and behavior.
+
+Every command receives Pi's current `PI_SESSION_ID`, `PI_SESSION_FILE`,
+`PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` values when available. The
+extension replaces inherited values when each process starts, so nested Pi
+sessions cannot leak stale parent metadata into managed terminals.
 
 For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
@@ -41,19 +53,33 @@ without mixing metadata into command output:
   └ ● demo-loop-a1b2c3d4 · running · /ps
 ```
 
-`terminal_write` and `job_output` use the same colored `•` headline, dim
-terminal name, accent reasoning, `│` output gutter, and `└` metadata hierarchy:
-`Interacted with <terminal> to <goal>`, `Waited for <terminal> to <goal>`, or
-`Read from <terminal> to <goal>`.
+`terminal_write` and `job_output` use the same colored `•` headline, distinct
+heading-colored terminal name, accent reasoning, dim `│` command-output gutter, tail-first
+collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
+`Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
+`job_kill` uses the stopping icon while the request is in flight, then renders
+the terminal's final status icon and color. No-op stop requests render as
+`◷ <id> is already timed out.` instead of plain status text. The `/jobs` and
+`/ps` live viewer uses that same normal command-output treatment.
 
-After terminals yield into the background, the footer shows:
+After terminals yield into the background, they appear in the shared top-right
+overlay stack:
 
 ```text
-2 background jobs running · /jobs to view
+ Jobs ● 2 running · /ps
+ ● frontend dev server
+   bun run dev
+ ● test watcher
+   bun test --watch
 ```
 
-Commands that are still inside their initial foreground yield window do not show
-this footer status.
+Each terminal gets two compact rows for its description and command, with a TTY
+marker when applicable. Internal terminal IDs stay out of the overlay and remain
+available through `/ps`. The card shows up to three terminals plus an overflow hint, hides when
+none are running, and stays hidden while commands are still inside their initial
+foreground yield window. It also hides on terminals narrower than 90 columns or
+shorter than 10 rows. Use `/overlay` or `Ctrl+Shift+O` to toggle the shared stack.
+The footer remains clear so job state is not duplicated.
 
 Commands:
 
@@ -88,18 +114,15 @@ a duplicate transcript entry.
 - Collapsed cards and the viewer render bounded latest-output tails with width-keyed caches; expanded cards remain available on explicit request.
 - Historical terminal interaction cards freeze elapsed time at the result's observation timestamp, so unrelated streaming renders remain byte-stable and preserve a scrolled viewport.
 - Tool output remains below Pi's 50KB limit.
-- Session shutdown waits for SIGTERM/SIGKILL escalation.
+- Explicit timeouts and session shutdown send SIGTERM first, wait up to five seconds, then escalate surviving process trees to SIGKILL.
+- Pi's normal SIGINT, SIGTERM, and SIGHUP shutdown path remains in control and gives `session_shutdown` time to complete that escalation.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
-- A last-resort reaper also SIGKILLs every live job's process tree from
-  `process.on('exit')` and `SIGTERM`/`SIGHUP`/`SIGINT`, so a managed terminal
-  that ignores SIGTERM (`trap '' TERM`) cannot survive an ungraceful pi exit
-  (crash, `emergencyTerminalExit`, signal). Without it, such jobs were
-  re-parented to PID 1 and leaked system resources.
-- Yielded command completions update footer status and any open live viewer without emitting desktop notifications or mutating historical transcript rows.
+- A synchronous `process.on('exit')` reaper is retained only as a last resort for hard exits that bypass or interrupt graceful session cleanup. It does not install signal listeners or suppress default signal behavior.
+- Yielded command lifecycle changes update the shared overlay and any open live viewer without emitting desktop notifications or mutating historical transcript rows.
 
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/), [`overlay-stack`](../overlay-stack/).
 - **Used by extensions:** [`better-native-pi`](../better-native-pi/).
 - **System/service:** `expect` on macOS or util-linux `script` on Linux for PTY sessions.

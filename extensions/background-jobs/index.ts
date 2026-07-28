@@ -13,19 +13,29 @@ import {
 	type Focusable,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { fitToolLine } from "../better-native-pi/core.js";
+import { fitToolLine, renderCommandOutput } from "../better-native-pi/core.js";
+import { registerOverlayCard } from "../overlay-stack/index.js";
 import { BoundedOutput, CursorOutput, sanitizeTerminalOutput, type CursorRead } from "./output.js";
 import {
 	CoalescedRefresh,
 	LIVE_REFRESH_FALLBACK_MS,
 } from "./refresh.js";
-import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
+import {
+	BASH_SESSION_ENV_GUIDELINE,
+	clearBackgroundTerminalService,
+	hasBetterNativeBashIntegration,
+	setBackgroundTerminalService,
+	type BackgroundTerminalService,
+} from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
 
 const ENTRY_TYPE = "background-job";
 const STATUS_KEY = "background-jobs";
+const OVERLAY_WIDTH = 58;
+const OVERLAY_JOB_ROWS = 2;
+const OVERLAY_MAX_ROWS = 7;
 const MAX_CONCURRENT_JOBS = 16;
 const MAX_RETAINED_JOBS = 50;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
@@ -34,25 +44,42 @@ const PERSISTED_OUTPUT_BYTES = 8 * 1024;
 const VIEWER_OUTPUT_BYTES = 64 * 1024;
 const TERMINAL_TOOL_NAMES = ["job_output", "terminal_write", "job_kill"] as const;
 const TERMINAL_TOOL_NAME_SET = new Set<string>(TERMINAL_TOOL_NAMES);
+const PI_SESSION_ENV_KEYS = [
+	"PI_SESSION_ID",
+	"PI_SESSION_FILE",
+	"PI_PROVIDER",
+	"PI_MODEL",
+	"PI_REASONING_LEVEL",
+] as const;
+
+function bashSessionEnvironment(ctx: any, getThinkingLevel: () => unknown): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	for (const key of PI_SESSION_ENV_KEYS) delete env[key];
+
+	const sessionId = ctx.sessionManager?.getSessionId?.();
+	const sessionFile = ctx.sessionManager?.getSessionFile?.();
+	const provider = ctx.model?.provider;
+	const model = ctx.model?.id;
+	const thinkingLevel = ctx.thinkingLevel ?? getThinkingLevel();
+
+	if (typeof sessionId === "string" && sessionId) env.PI_SESSION_ID = sessionId;
+	if (typeof sessionFile === "string" && sessionFile) env.PI_SESSION_FILE = sessionFile;
+	if (typeof provider === "string" && provider) env.PI_PROVIDER = provider;
+	if (typeof model === "string" && model) env.PI_MODEL = model;
+	if (typeof thinkingLevel === "string" && thinkingLevel) env.PI_REASONING_LEVEL = thinkingLevel;
+	return env;
+}
 
 // ---------------------------------------------------------------------------
-// Last-resort reaper: prevent orphaned managed terminals on ungraceful exit.
+// Last-resort reaper: prevent orphaned managed terminals on hard process exit.
 // ---------------------------------------------------------------------------
-// `session_shutdown` (graceful /quit, Ctrl+D, SIGTERM, /reload) calls
-// requestKill + awaits completion, so jobs are reaped there. But pi has other
-// exit paths that do NOT fire session_shutdown:
-//   - emergencyTerminalExit() (dead/EIO terminal) calls process.exit(129).
-//   - uncaughtException / unhandledRejection hard exits.
-//   - SIGKILL of the pi process itself.
-//   - a crash mid-run while a job is `trap '' TERM`-ignoring SIGTERM.
-// On those paths the killTimer (5s SIGTERM->SIGKILL escalation) never fires,
-// and detached children (each its own session leader via spawnTerminal) are
-// re-parented to PID 1 and live forever as resource-leaking orphans. Register
-// every live job's pids here and SIGKILL their whole process tree from process exit + the same
-// signals pi listens to, as a sync best-effort. Idempotent and re-entrant.
+// Normal exits, including SIGINT/SIGTERM/SIGHUP, flow through session_shutdown,
+// which performs the graceful SIGTERM -> grace period -> SIGKILL sequence.
+// Registering our own signal listeners would suppress Node's default signal
+// behavior and could race Pi's shutdown handler, so this fallback intentionally
+// runs only from the synchronous process `exit` event.
 const liveJobPids = new Set<number>();
 let lastResortReaperArmed = false;
-const LAST_RESORT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP", "SIGINT"];
 
 function reapLiveJobPidsSync(): void {
 	for (const pid of liveJobPids) {
@@ -71,15 +98,9 @@ function reapLiveJobPidsSync(): void {
 function armLastResortReaper(): void {
 	if (lastResortReaperArmed) return;
 	lastResortReaperArmed = true;
-	// process 'exit' is sync-only and the only hook guaranteed to run on
-	// process.exit() and uncaught exceptions. Cannot do async work here.
+	// This hook must remain synchronous. SIGKILL cannot be handled, so cleanup
+	// after the parent itself receives SIGKILL is inherently impossible.
 	process.on("exit", reapLiveJobPidsSync);
-	// Signals: reaping from inside a signal handler is best-effort. If pi has
-	// its own handler that calls process.exit, the 'exit' hook above still
-	// runs; if pi is SIGKILLed, nothing can run, which is unavoidable.
-	for (const sig of LAST_RESORT_SIGNALS) {
-		process.once(sig, reapLiveJobPidsSync);
-	}
 }
 
 function trackJobPid(pid: number | undefined): void {
@@ -104,10 +125,6 @@ function outputBytesForTokens(tokens?: number): number {
 }
 const KILL_GRACE_MS = 5_000;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
-// A 10s hard kill is applied when the model omits `timeout`, so a stuck
-// process can never hang a session indefinitely. The model raises `timeout`
-// for genuinely long work.
-const DEFAULT_TIMEOUT_SECONDS = 10;
 const DEFAULT_YIELD_MS = 10_000;
 const DEFAULT_POLL_MS = 5_000;
 const MAX_POLL_MS = 5 * 60 * 1_000;
@@ -183,6 +200,7 @@ interface ManagedJob {
 
 interface BackgroundJobsOptions {
 	killGraceMs?: number;
+	registerOverlayCard?: typeof registerOverlayCard;
 }
 
 function isActive(job: Pick<ManagedJob, "status">): boolean {
@@ -242,6 +260,49 @@ function statusColor(status: JobStatus): string {
 	if (status === "completed") return "success";
 	if (status === "killed") return "muted";
 	return "error";
+}
+
+function isJobStatus(status: unknown): status is JobStatus {
+	return status === "running" || status === "stopping" || status === "completed" || status === "failed" || status === "killed" || status === "timed_out";
+}
+
+function displayStatusText(text: string): string {
+	return text.replace(/\btimed_out\b/g, "timed out");
+}
+
+function textResult(result: any): string {
+	const content = result?.content?.[0];
+	return content?.type === "text" ? content.text : "";
+}
+
+function renderJobKillResult(result: any, theme: any, context: any): Text {
+	const text = displayStatusText(textResult(result));
+	if (!text) return new Text("", 0, 0);
+	const status = result?.details?.status;
+	if (isJobStatus(status)) return new Text(`${theme.fg(statusColor(status), statusSymbol(status))} ${text}`, 0, 0);
+	if (context?.isError) return new Text(`${theme.fg("warning", "■")} ${theme.fg("warning", text)}`, 0, 0);
+	return new Text(text, 0, 0);
+}
+
+function renderOverlayJob(job: ManagedJob, width: number, theme: any): string[] {
+	const mark = theme.fg(statusColor(job.status), statusSymbol(job.status));
+	const name = theme.bold(compactCommand(job.description, Math.max(16, width - 4)));
+	const headline = truncateToWidth(`${mark} ${name}`, width, "…");
+	const command = compactCommand(job.command, Math.max(24, width * 2));
+	return [
+		headline,
+		truncateToWidth(theme.fg("dim", `  ${command}${job.tty ? " · tty" : ""}`), width, "…"),
+	];
+}
+
+function renderJobsOverlayBody(jobs: ManagedJob[], width: number, maxHeight: number, theme: any): string[] {
+	const rowBudget = Math.max(0, Math.min(OVERLAY_MAX_ROWS, maxHeight));
+	if (rowBudget < OVERLAY_JOB_ROWS || jobs.length === 0) return [];
+	const shownCount = Math.min(jobs.length, Math.floor(rowBudget / OVERLAY_JOB_ROWS));
+	const lines = jobs.slice(0, shownCount).flatMap((job) => renderOverlayJob(job, width, theme));
+	const hidden = jobs.length - shownCount;
+	if (hidden > 0 && lines.length < rowBudget) lines.push(theme.fg("dim", `… ${hidden} more · /ps`));
+	return lines.map((line) => truncateToWidth(line, width, "…"));
 }
 
 function snapshot(job: ManagedJob, outputLimit?: number): JobSnapshot {
@@ -355,7 +416,6 @@ function viewerRevision(snapshot: JobViewerSnapshot): string {
 }
 
 function boundedViewerOutput(text: string, width: number, maxRows: number): string[] {
-	if (!text.trim()) return ["(no output)"];
 	const rowLimit = Math.max(1, maxRows);
 	const inputLimit = Math.max(1_024, width * rowLimit * 4);
 	let bounded = text;
@@ -364,14 +424,11 @@ function boundedViewerOutput(text: string, width: number, maxRows: number): stri
 		bounded = sanitizeTerminalOutput(bounded.slice(-inputLimit));
 		omitted = true;
 	}
-	let rows = bounded.replace(/\s+$/, "").split("\n")
-		.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
-	if (rows.length > rowLimit) {
-		rows = rowLimit === 1 ? rows.slice(-1) : rows.slice(-(rowLimit - 1));
-		omitted = true;
-	}
-	if (omitted && rowLimit > 1) rows = ["… earlier output omitted …", ...rows].slice(-rowLimit);
-	return rows.length > 0 ? rows : ["(no output)"];
+	return renderCommandOutput(bounded, width, {
+		maxRows: rowLimit,
+		forceOmission: omitted,
+		omissionText: () => "… earlier output omitted …",
+	});
 }
 
 export class JobOutputViewer implements Focusable {
@@ -520,20 +577,18 @@ class TerminalInteractionComponent {
 		const color = statusColor(details.status);
 		const name = details.description || details.id;
 		const reasoning = typeof this.args?.reasoning === "string" ? compactCommand(this.args.reasoning, 96) : "";
-		const terminal = this.theme.fg("dim", compactCommand(name, 64));
+		const terminal = this.theme.fg("mdHeading", compactCommand(name, 64));
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details, this.observedAt));
 		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
-		const output = details.output?.replace(/\s+$/, "") || "(no new output)";
-		const bodyWidth = Math.max(1, max - 4);
-		let rows = output.split("\n").flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
-		if (!this.expanded && rows.length > 5) {
-			const omitted = rows.length - 4;
-			rows = [...rows.slice(0, 2), `… +${omitted} lines (Ctrl+O)`, ...rows.slice(-2)];
-		}
+		const output = details.output?.replace(/\s+$/, "") ?? "";
+		const rows = renderCommandOutput(output, max, {
+			maxRows: this.expanded ? undefined : 5,
+			emptyText: "(no new output)",
+		});
 		return [
 			fitToolLine(header, max),
-			...rows.map((row) => truncateToWidth(`${this.theme.fg("dim", "  │ ")}${row}`, max, "…")),
+			...rows,
 			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${details.id}${details.tty ? " · tty" : ""}`)}`, max),
 		];
 	}
@@ -544,6 +599,7 @@ class TerminalInteractionComponent {
 export default function registerBackgroundJobs(pi: ExtensionAPI, options: BackgroundJobsOptions = {}) {
 	const jobs = new Map<string, ManagedJob>();
 	const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
+	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	let activeCtx: any;
 	let sessionGeneration = 0;
 
@@ -563,11 +619,28 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		pi.setActiveTools([...active, ...added]);
 	};
 	const activeJobs = () => [...jobs.values()].filter(isActive);
-	const activeBackgroundJobs = () => activeJobs().filter((job) => job.backgrounded);
-	const updateStatus = () => {
-		if (!activeCtx) return;
-		const count = activeBackgroundJobs().length;
-		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} background job${count === 1 ? "" : "s"} running · /jobs to view` : undefined);
+	const activeBackgroundJobs = () => activeJobs()
+		.filter((job) => job.backgrounded)
+		.sort((a, b) => b.startedAt - a.startedAt);
+	const overlayCard = registerCard({
+		id: "background-jobs",
+		order: 16,
+		width: OVERLAY_WIDTH,
+		minBodyHeight: OVERLAY_JOB_ROWS,
+		minTerminalWidth: 90,
+		minTerminalHeight: 10,
+		visible: () => activeBackgroundJobs().length > 0,
+		title: (theme) => {
+			const count = activeBackgroundJobs().length;
+			return `${theme.bold(" Jobs ")}${theme.fg("accent", `● ${count} running`)} ${theme.fg("dim", "· /ps ")}`;
+		},
+		renderBody: (width, maxHeight, theme) => renderJobsOverlayBody(activeBackgroundJobs(), width, maxHeight, theme),
+	});
+	const updateUi = () => {
+		// Clear the legacy footer key on reload; live job state belongs in the
+		// shared top-right overlay alongside plans, goals, and subagents.
+		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
+		overlayCard.invalidate();
 	};
 	const emitActivity = (job: ManagedJob) => {
 		for (const listener of [...job.activityListeners]) listener();
@@ -622,12 +695,14 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				if (job.pendingClose) finalize(job, job.pendingClose.code, job.pendingClose.signal);
 			}, 25);
 		}, killGraceMs);
-		updateStatus();
+		updateUi();
 		emitActivity(job);
 		return true;
 	};
 	finalize = (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
 		if (job.finalized) return;
+		untrackJobPid(job.process?.pid);
+		untrackJobPid(job.ptyPid);
 		job.finalized = true;
 		job.endedAt = Date.now();
 		job.exitCode = code ?? undefined;
@@ -643,7 +718,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		emitActivity(job);
 		job.resolveCompletion();
 		trimRetained();
-		updateStatus();
+		updateUi();
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
@@ -653,8 +728,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
-		const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
-		if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS) {
+		const timeoutSeconds = params.timeoutSeconds;
+		if (timeoutSeconds !== undefined && (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
 			throw new Error(`timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`);
 		}
 		if (params.tty && !isPtySupported()) throw new Error("PTY mode is unavailable on this platform");
@@ -693,6 +768,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				command,
 				cwd,
 				tty: job.tty,
+				env: bashSessionEnvironment(ctx, () => pi.getThinkingLevel?.()),
 				onStdout: (chunk) => appendOutput(job, "stdout", chunk),
 				onStderr: (chunk) => appendOutput(job, "stderr", chunk),
 				onPtyPid: (pid) => {
@@ -718,7 +794,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		});
 		job.process.once("close", (code, signal) => {
 			untrackJobPid(job.process?.pid);
-			untrackJobPid(job.ptyPid);
 			if (job.ptyPid && pidExists(job.ptyPid)) {
 				job.pendingClose = { code, signal };
 				if (!job.killReason) {
@@ -729,18 +804,21 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				}
 				return;
 			}
+			untrackJobPid(job.ptyPid);
 			finalize(job, code, signal);
 		});
-		job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
-		job.timeout.unref?.();
-		updateStatus();
+		if (timeoutSeconds !== undefined) {
+			job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
+			job.timeout.unref?.();
+		}
+		updateUi();
 		return job;
 	};
 	const waitForCompletion = async (job: ManagedJob, signal: AbortSignal | undefined, waitMs = DEFAULT_WAIT_COMPLETION_MS) => {
 		// Never block unboundedly: wait for completion OR a soft deadline,
 		// whichever comes first, then return so the model can re-decide
-		// (re-poll / kill / move on). The process is NOT killed here —
-		// killing is the job's hard-timeout responsibility.
+		// (re-poll / kill / move on). The process is NOT killed here; only an
+		// explicit hard timeout or stop request ends a still-running terminal.
 		if (!isActive(job) || waitMs <= 0) return;
 		if (signal?.aborted) return;
 		await new Promise<void>((resolvePromise) => {
@@ -890,7 +968,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			// before returning so the next model turn can act on this terminal ID.
 			job.backgrounded = true;
 			activateTerminalTools();
-			updateStatus();
+			updateUi();
 		}
 		const outputBytes = outputBytesForTokens(params.max_output_tokens);
 		const { read, details } = readDelta(job, initialCursor, true, outputBytes);
@@ -931,6 +1009,34 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		},
 	};
 	setBackgroundTerminalService(terminalService);
+
+	const registerStandaloneBash = () => {
+		pi.registerTool({
+			name: "bash",
+			label: "bash",
+			description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.",
+			promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
+			promptGuidelines: [BASH_SESSION_ENV_GUIDELINE],
+			parameters: {
+				type: "object",
+				properties: {
+					command: { type: "string", description: "Shell command to run" },
+					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds. Omit to let the command run until completion or an explicit stop.` },
+					cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
+					tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
+					"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
+					max_output_tokens: { type: "integer", minimum: 1, description: "Output byte budget in tokens (~4 bytes/token). Defaults to 10000; larger requests cap at 1 MiB." },
+					reasoning: { type: "string", description: "Goal or intent behind running this command" },
+				},
+				required: ["command", "reasoning"],
+			} as any,
+			executionMode: "sequential",
+			execute: executeUnified,
+			renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${compactCommand(args.reasoning || args.command || "")}`, 0, 0),
+			renderResult: (result: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
+			renderShell: "self",
+		});
+	};
 
 	// Completion entries persist final state without an entry renderer. The
 	// original tool card reads the live/restored job and updates in place. An
@@ -1027,8 +1133,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			requestKill(job, "user");
 			return { content: [{ type: "text", text: `Sent SIGTERM to background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "terminal"}`, 0, 0),
-		renderResult: (result: any, _options: any, theme: any, context: any) => new Text(context?.isError ? theme.fg("warning", result?.content?.[0]?.text ?? "") : result?.content?.[0]?.text ?? "", 0, 0),
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "◌")} Stopping ${args.job_id ?? "terminal"}`, 0, 0),
+		renderResult: (result: any, _options: any, theme: any, context: any) => renderJobKillResult(result, theme, context),
 		renderShell: "self",
 	});
 
@@ -1086,6 +1192,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		// Each extension owns a complete standalone Bash tool. When better-native-pi
+		// is present, it owns the combined definition and uses this service backend.
+		if (!hasBetterNativeBashIntegration()) registerStandaloneBash();
 		// Tool registration makes every definition active by default. Most sessions
 		// never yield a command, so keep terminal controls out of the initial model
 		// context and add them only when executeUnified returns a live terminal ID.
@@ -1100,7 +1209,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			jobs.set(data.id, restoredJob(data, sessionGeneration));
 		}
 		trimRetained();
-		updateStatus();
+		updateUi();
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -1113,11 +1222,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		await Promise.all(stopping.map((job) => job.completion));
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
-		// Belt-and-suspenders: graceful shutdown reaped everything via
-		// requestKill, but clear the reaper set in case any close handler
-		// hasn't fired yet (e.g. a SIGTERM-ignoring job whose SIGKILL is still
-		// mid-escalation). The last-resort reaper stays armed for the next.
-		liveJobPids.clear();
+		overlayCard.invalidate();
 		clearBackgroundTerminalService(terminalService);
 		activeCtx = undefined;
 	});

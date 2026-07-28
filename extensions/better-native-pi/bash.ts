@@ -9,26 +9,24 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { getBackgroundTerminalService, type BackgroundTerminalService } from "../background-jobs/service.js";
+import { createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	BASH_SESSION_ENV_GUIDELINE,
+	clearBetterNativeBashIntegration,
+	getBackgroundTerminalService,
+	setBetterNativeBashIntegration,
+	type BackgroundTerminalService,
+	type BetterNativeBashIntegration,
+} from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
-import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
+import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, renderCommandOutput, withReasoning } from "./core.js";
 
 const OUTPUT_ROWS = 5;
 const COMMAND_ROWS = 8;
 const EXPANDED_OUTPUT_BYTES = 256 * 1024;
 const COLLAPSED_OUTPUT_BYTES = 4 * 1024;
 const COMMAND_INDENT = "  ";
-const DIM = "\x1b[2m";
-const RESET = "\x1b[0m";
-// The command box and output bar share the same left edge, keeping input and
-// output visually connected while preserving the blockquote-style output.
-const BAR = "│";
-const OUTPUT_PREFIX = `${COMMAND_INDENT}${BAR} `;
-function barLine(text: string): string {
-	return `${DIM}${OUTPUT_PREFIX}${text}${RESET}`;
-}
 const RENDER_STATS_KEY = Symbol.for("pi.renderer-cache.stats");
 
 interface RendererCacheStats {
@@ -67,7 +65,7 @@ function withTerminalParameters(parameters: any): any {
 		...base,
 		properties: {
 			...base.properties,
-			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Optional hard timeout from 1 to 86400 seconds" },
+			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Optional hard timeout from 1 to 86400 seconds. Omit to let the command run until completion or an explicit stop." },
 			cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 			tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters. Non-tty commands spawn with stdin closed (EOF) so a command that reads stdin with no input exits instead of hanging; use tty=true for commands you need to feed via terminal_write.", default: false },
 			"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: "Wait before yielding a terminal ID (default 10000 ms)" },
@@ -120,23 +118,6 @@ function renderedCommand(command: string, width: number, expanded: boolean, them
 	})
 		.map((line) => `${COMMAND_INDENT}${line}`)
 		.map((line) => fitToolLine(line, max));
-}
-
-function wrappedOutput(text: string, width: number): string[] {
-	const bodyWidth = Math.max(1, width - OUTPUT_PREFIX.length);
-	const rows = text.replace(/\t/g, "   ").replace(/\s+$/, "").split("\n")
-		.flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
-	return rows.map((row) => barLine(row));
-}
-
-function boundedRows(rows: string[]): string[] {
-	if (rows.length <= OUTPUT_ROWS) return rows;
-	const tailRows = OUTPUT_ROWS - 1;
-	const omitted = rows.length - tailRows;
-	return [
-		barLine(`… +${omitted} earlier lines (Ctrl+O for full output)`),
-		...rows.slice(-tailRows),
-	];
 }
 
 function terminalStatusColor(status: string): string {
@@ -198,8 +179,9 @@ class CommandComponent {
 		}
 
 		const text = resultText(this.result);
-		let output = text.trim() ? wrappedOutput(text, max) : [barLine("(no output)")];
-		if (!this.options.expanded) output = boundedRows(output);
+		const output = renderCommandOutput(text, max, {
+			maxRows: this.options.expanded ? undefined : OUTPUT_ROWS,
+		});
 		const fittedBlock = block.map((line) => fitToolLine(line, max));
 		this.cachedLines = [...fittedBlock, ...command, ...output];
 		this.cachedWidth = max;
@@ -303,8 +285,10 @@ class ManagedCommandComponent {
 			? renderedCommand(this.args.command, max, this.expanded, this.theme)
 			: [];
 		const text = view.output.replace(/\s+$/, "");
-		let output = text ? wrappedOutput(text, max) : [barLine(active ? "(waiting for output)" : "(no output)")];
-		if (!this.expanded) output = boundedRows(output);
+		const output = renderCommandOutput(text, max, {
+			maxRows: this.expanded ? undefined : OUTPUT_ROWS,
+			emptyText: active ? "(waiting for output)" : "(no output)",
+		});
 		if (!details.backgrounded) {
 			const result = [...block, ...command, ...output];
 			this.cachedLines = result;
@@ -330,89 +314,88 @@ class ManagedCommandComponent {
 
 export default function bash(pi: ExtensionAPI) {
 	const bashTool = createBashToolDefinition(process.cwd());
-	const terminalService = getBackgroundTerminalService();
-	const terminalEnabled = Boolean(terminalService);
-	pi.registerTool({
-		name: "bash",
-		label: "bash",
-		description: terminalEnabled
-			? `${bashTool.description} Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.`
-			: bashTool.description,
-		promptSnippet: bashTool.promptSnippet,
-		parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
-		promptGuidelines: bashTool.promptGuidelines,
-		renderShell: "self",
-		execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
-			const terminal = getBackgroundTerminalService();
-			if (terminal) return terminal.execute(id, params, signal, onUpdate, ctx);
-			const { rest } = stripReasoning(params);
-			return createBashTool(ctx.cwd).execute(id, rest, signal, onUpdate);
+	const integration: BetterNativeBashIntegration = {
+		refresh(terminalService) {
+			const terminalEnabled = Boolean(terminalService);
+			pi.registerTool({
+				name: "bash",
+				label: "bash",
+				description: terminalEnabled
+					? `${bashTool.description} Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.`
+					: bashTool.description,
+				promptSnippet: bashTool.promptSnippet,
+				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
+				promptGuidelines: bashTool.promptGuidelines ?? [BASH_SESSION_ENV_GUIDELINE],
+				renderShell: "self",
+				execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
+					const terminal = getBackgroundTerminalService();
+					if (terminal) return terminal.execute(id, params, signal, onUpdate, ctx);
+					const { rest } = stripReasoning(params);
+					return createBashToolDefinition(ctx.cwd).execute(id, rest, signal, onUpdate, ctx);
+				},
+				renderCall: (args: any, theme: any, context: any) => {
+					if (!context?.isPartial) return new Container();
+					// Managed results own the entire card, so a separate call card would
+					// briefly duplicate the command while foreground output streams.
+					if (getBackgroundTerminalService()) return new Container();
+					context.state.startedAt ??= Date.now();
+					return new CommandComponent(args, {}, {
+						partial: true,
+						expanded: false,
+						error: false,
+						elapsedMs: Date.now() - context.state.startedAt,
+						cwd: context.cwd,
+					}, theme);
+				},
+				renderResult: (result: any, options: any, theme: any, context: any) => {
+					const terminal = getBackgroundTerminalService();
+					// Foreground managed output streams into this component. After a
+					// yield, the transcript snapshot freezes and /ps owns live updates.
+					if (options?.isPartial && terminal && result?.details?.managedTerminal) {
+						let component = context.state.managedCommand as ManagedCommandComponent | undefined;
+						if (!component) {
+							component = new ManagedCommandComponent(
+								context.args ?? { command: result.details.command, reasoning: result.details.description },
+								result,
+								Boolean(options.expanded),
+								theme,
+								context.cwd,
+								terminal,
+							);
+							context.state.managedCommand = component;
+						} else component.update(result, Boolean(options.expanded));
+						return component;
+					}
+					if (options?.isPartial) return new Container();
+					if (terminal && result?.details?.managedTerminal) {
+						let component = context.state.managedCommand as ManagedCommandComponent | undefined;
+						if (!component) {
+							component = new ManagedCommandComponent(
+								context.args ?? { command: result.details.command, reasoning: result.details.description },
+								result,
+								Boolean(options.expanded),
+								theme,
+								context.cwd,
+								terminal,
+							);
+							context.state.managedCommand = component;
+						} else component.update(result, Boolean(options.expanded));
+						return component;
+					}
+					context.state.startedAt ??= Date.now();
+					context.state.endedAt ??= Date.now();
+					return new CommandComponent(context.args ?? {}, result, {
+						partial: false,
+						expanded: options?.expanded ?? false,
+						error: context?.isError ?? result?.isError ?? false,
+						elapsedMs: context.state.endedAt - context.state.startedAt,
+						cwd: context.cwd,
+					}, theme);
+				},
+			});
 		},
-		renderCall: (args: any, theme: any, context: any) => {
-			if (!context?.isPartial) return new Container();
-			// When the terminal service is present, execute delegates to
-			// executeUnified, whose result always carries managedTerminal details.
-			// renderResult mounts a ManagedCommandComponent that owns the entire card
-			// (headline + command + output), so the call card would duplicate it.
-			// Returning empty here avoids a one-frame double-card: renderCall runs
-			// before renderResult in the same frame, so the state check alone can't
-			// close the gap.
-			if (getBackgroundTerminalService()) return new Container();
-			context.state.startedAt ??= Date.now();
-			return new CommandComponent(args, {}, {
-				partial: true,
-				expanded: false,
-				error: false,
-				elapsedMs: Date.now() - context.state.startedAt,
-				cwd: context.cwd,
-			}, theme);
-		},
-		renderResult: (result: any, options: any, theme: any, context: any) => {
-			const terminal = getBackgroundTerminalService();
-			// Stream partial output for managed terminals: executeUnified pushes
-			// coalesced updates while the job runs. Render the live component so
-			// stdout appears during the foreground yield window; once yielded, the
-			// transcript card freezes and /ps owns live updates.
-			if (options?.isPartial && terminal && result?.details?.managedTerminal) {
-				let component = context.state.managedCommand as ManagedCommandComponent | undefined;
-				if (!component) {
-					component = new ManagedCommandComponent(
-						context.args ?? { command: result.details.command, reasoning: result.details.description },
-						result,
-						Boolean(options.expanded),
-						theme,
-						context.cwd,
-						terminal,
-					);
-					context.state.managedCommand = component;
-				} else component.update(result, Boolean(options.expanded));
-				return component;
-			}
-			if (options?.isPartial) return new Container();
-			if (terminal && result?.details?.managedTerminal) {
-				let component = context.state.managedCommand as ManagedCommandComponent | undefined;
-				if (!component) {
-					component = new ManagedCommandComponent(
-						context.args ?? { command: result.details.command, reasoning: result.details.description },
-						result,
-						Boolean(options.expanded),
-						theme,
-						context.cwd,
-						terminal,
-					);
-					context.state.managedCommand = component;
-				} else component.update(result, Boolean(options.expanded));
-				return component;
-			}
-			context.state.startedAt ??= Date.now();
-			context.state.endedAt ??= Date.now();
-			return new CommandComponent(context.args ?? {}, result, {
-				partial: false,
-				expanded: options?.expanded ?? false,
-				error: context?.isError ?? result?.isError ?? false,
-				elapsedMs: context.state.endedAt - context.state.startedAt,
-				cwd: context.cwd,
-			}, theme);
-		},
-	});
+	};
+
+	setBetterNativeBashIntegration(integration);
+	pi.on("session_shutdown", () => clearBetterNativeBashIntegration(integration));
 }

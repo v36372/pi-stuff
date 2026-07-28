@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 import {
 	Markdown,
 	truncateToWidth,
@@ -205,29 +204,14 @@ export interface CodeBoxOptions {
 	renderOmission?: (omitted: number, innerWidth: number) => string;
 }
 
-/** Render the same bordered code box used by patched Markdown code blocks. */
-export function renderCodeBox(
+function renderCodeRows(
 	code: string,
 	lang: unknown,
 	width: number,
 	theme: any,
-	options: CodeBoxOptions = {},
+	options: CodeBoxOptions,
 ): string[] {
 	const maxWidth = Math.max(1, width);
-	const label = fitBorderLabel(languageLabel(lang), maxWidth);
-
-	// Very narrow panes cannot support a useful box. They still get highlighted
-	// code without exposing Markdown fence markers.
-	if (maxWidth < 8) {
-		const styleApplier = buildStyleApplier(theme, options.defaultTextStyle);
-		return code.split("\n").map((line) => applyStyleToLine(styleApplier, theme.codeBlock(line)));
-	}
-
-	const innerWidth = Math.max(1, maxWidth - 4);
-	const labelText = ` ${label} `;
-	const topFill = "─".repeat(Math.max(0, maxWidth - visibleWidth(labelText) - 2));
-	const lines = [theme.codeBlockBorder(`╭${labelText}${topFill}╮`)];
-
 	const highlighted = theme.highlightCode
 		? theme.highlightCode(code, lang)
 		: code.split("\n").map((line: string) => theme.codeBlock(line));
@@ -237,32 +221,84 @@ export function renderCodeBox(
 	// top of the syntax-highlighted lines. Syntax token colors win for their own
 	// spans; the thinking color fills the gaps and italic composes throughout.
 	const styleApplier = buildStyleApplier(theme, options.defaultTextStyle);
-	let bodyRows: string[] = [];
+	let rows: string[] = [];
 	for (const sourceLine of sourceLines) {
-		const wrapped = wrapTextWithAnsi(applyStyleToLine(styleApplier, sourceLine), innerWidth);
-		bodyRows.push(...(wrapped.length > 0 ? wrapped : [""]));
+		const wrapped = wrapTextWithAnsi(applyStyleToLine(styleApplier, sourceLine), maxWidth);
+		rows.push(...(wrapped.length > 0 ? wrapped : [""]));
 	}
 
-	if (options.maxRows && options.maxRows > 0 && bodyRows.length > options.maxRows) {
+	if (options.maxRows && options.maxRows > 0 && rows.length > options.maxRows) {
 		const kept = Math.max(0, options.maxRows - 1);
-		const omitted = bodyRows.length - kept;
-		const omission = options.renderOmission?.(omitted, innerWidth)
+		const omitted = rows.length - kept;
+		const omission = options.renderOmission?.(omitted, maxWidth)
 			?? theme.codeBlock(`… +${omitted} lines`);
-		bodyRows = [...bodyRows.slice(0, kept), omission];
+		rows = [...rows.slice(0, kept), omission];
 	}
 
-	for (const row of bodyRows) {
-		const fitted = visibleWidth(row) <= innerWidth ? row : truncateToWidth(row, innerWidth, "");
-		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(fitted)));
-		lines.push(`${theme.codeBlockBorder("│ ")}${fitted}${padding}${theme.codeBlockBorder(" │")}`);
+	return rows.map((row) => visibleWidth(row) <= maxWidth
+		? row
+		: truncateToWidth(row, maxWidth, ""));
+}
+
+/** Render a copy-friendly Markdown code block with unframed code rows. */
+export function renderCodeBlock(
+	code: string,
+	lang: unknown,
+	width: number,
+	theme: any,
+	options: CodeBoxOptions = {},
+): string[] {
+	const maxWidth = Math.max(1, width);
+	const rows = renderCodeRows(code, lang, maxWidth, theme, options);
+	const label = fitBorderLabel(languageLabel(lang), maxWidth);
+	const labelText = `── ${label} `;
+	const contentWidth = rows.reduce((widest, row) => Math.max(widest, visibleWidth(row)), 0);
+	const ruleWidth = Math.min(maxWidth, Math.max(contentWidth, visibleWidth(labelText) + 4));
+	const topFill = "─".repeat(Math.max(0, ruleWidth - visibleWidth(labelText)));
+	const styleApplier = buildStyleApplier(theme, options.defaultTextStyle);
+	const rule = (text: string) => applyStyleToLine(
+		styleApplier,
+		theme.codeBlockBorder(truncateToWidth(text, ruleWidth, "")),
+	);
+
+	return [
+		rule(`${labelText}${topFill}`),
+		...rows,
+		rule("─".repeat(ruleWidth)),
+	];
+}
+
+/** Render the bordered code box used by the bash tool renderer. */
+export function renderCodeBox(
+	code: string,
+	lang: unknown,
+	width: number,
+	theme: any,
+	options: CodeBoxOptions = {},
+): string[] {
+	const maxWidth = Math.max(1, width);
+
+	// Very narrow panes cannot support a useful box. They still get highlighted
+	// code without exposing Markdown fence markers.
+	if (maxWidth < 8) return renderCodeRows(code, lang, maxWidth, theme, options);
+
+	const label = fitBorderLabel(languageLabel(lang), maxWidth);
+	const innerWidth = Math.max(1, maxWidth - 4);
+	const labelText = ` ${label} `;
+	const topFill = "─".repeat(Math.max(0, maxWidth - visibleWidth(labelText) - 2));
+	const lines = [theme.codeBlockBorder(`╭${labelText}${topFill}╮`)];
+
+	for (const row of renderCodeRows(code, lang, innerWidth, theme, options)) {
+		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(row)));
+		lines.push(`${theme.codeBlockBorder("│ ")}${row}${padding}${theme.codeBlockBorder(" │")}`);
 	}
 
 	lines.push(theme.codeBlockBorder(`╰${"─".repeat(Math.max(0, maxWidth - 2))}╯`));
 	return lines;
 }
 
-function renderCodeBlock(instance: any, token: any, width: number, nextTokenType?: string): string[] {
-	const lines = renderCodeBox(String(token.text ?? ""), token.lang, width, instance.theme, {
+function renderMarkdownCodeBlock(instance: any, token: any, width: number, nextTokenType?: string): string[] {
+	const lines = renderCodeBlock(String(token.text ?? ""), token.lang, width, instance.theme, {
 		defaultTextStyle: instance.defaultTextStyle,
 	});
 	if (nextTokenType && nextTokenType !== "space") lines.push("");
@@ -287,7 +323,7 @@ function acquirePatch(): () => void {
 		nextTokenType?: string,
 		styleContext?: any,
 	): string[] {
-		if (token?.type === "code") return renderCodeBlock(this, token, width, nextTokenType);
+		if (token?.type === "code") return renderMarkdownCodeBlock(this, token, width, nextTokenType);
 		return original.call(this, token, width, nextTokenType, styleContext);
 	};
 
@@ -324,50 +360,6 @@ class CodeBlockHost implements Component {
 	}
 }
 
-/** Extract raw fenced code bodies from markdown text (no fences, no UI borders). */
-export function extractFencedCodeBlocks(markdown: string): string[] {
-	const blocks: string[] = [];
-	// Match ``` or ~~~ fences; capture body only. Language tags are ignored.
-	const fenceRe = new RegExp("^(?:`{3,}|~{3,})[^\\n]*\\n([\\s\\S]*?)^(?:`{3,}|~{3,})\\s*$", "gm");
-	let match: RegExpExecArray | null;
-	while ((match = fenceRe.exec(markdown)) !== null) {
-		const body = match[1] ?? "";
-		// Preserve exact body content, including trailing newline before closing fence.
-		blocks.push(body.replace(/\n$/, ""));
-	}
-	return blocks;
-}
-
-function lastAssistantText(ctx: { sessionManager: { getBranch: () => Array<{ type: string; message?: { role?: string; content?: unknown; stopReason?: string } }> } }): string | undefined {
-	const branch = ctx.sessionManager.getBranch();
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
-		const msg = entry.message;
-		if (msg.stopReason === "aborted" && (!Array.isArray(msg.content) || msg.content.length === 0)) {
-			continue;
-		}
-		const content = msg.content;
-		if (!Array.isArray(content)) return undefined;
-		let text = "";
-		for (const block of content) {
-			if (
-				typeof block === "object" &&
-				block !== null &&
-				"type" in block &&
-				(block as { type: string }).type === "text" &&
-				"text" in block &&
-				typeof (block as { text: unknown }).text === "string"
-			) {
-				text += (block as { text: string }).text;
-			}
-		}
-		const trimmed = text.trim();
-		return trimmed || undefined;
-	}
-	return undefined;
-}
-
 export default function (pi: ExtensionAPI) {
 	let host: CodeBlockHost | undefined;
 
@@ -375,49 +367,6 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setWidget(HOST_KEY, undefined);
 		host = undefined;
 	};
-
-	const copyLastCodeBlocks = async (ctx: any) => {
-		const text = lastAssistantText(ctx);
-		if (!text) {
-			ctx.ui.notify("No agent messages to copy yet.", "warning");
-			return;
-		}
-
-		const blocks = extractFencedCodeBlocks(text);
-		if (blocks.length === 0) {
-			ctx.ui.notify("No code blocks in the last agent message.", "warning");
-			return;
-		}
-
-		// Raw code only — borders are pure render chrome from this extension.
-		const payload = blocks.join("\n\n");
-		try {
-			await copyToClipboard(payload);
-			const n = blocks.length;
-			ctx.ui.notify(
-				n === 1 ? "Copied 1 code block" : `Copied ${n} code blocks`,
-				"info",
-			);
-		} catch (error) {
-			ctx.ui.notify(
-				error instanceof Error ? error.message : String(error),
-				"error",
-			);
-		}
-	};
-
-	// Cmd+X on macOS. Pi's key id for the Command key is "super", not "cmd".
-	pi.registerShortcut("super+x", {
-		description: "Copy all code blocks from the last agent message",
-		handler: copyLastCodeBlocks,
-	});
-
-	pi.registerCommand("copy-code", {
-		description: "Copy all code blocks from the last agent message",
-		handler: async (_args, ctx) => {
-			await copyLastCodeBlocks(ctx);
-		},
-	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;

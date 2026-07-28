@@ -13,8 +13,9 @@
  *   (single-pane tabs have no border, so pane labels are invisible there)
  * - the current agent name (`herdr agent rename`)
  *
- * Refreshes on `agent_end` if `pi.getSessionName()` changed (e.g. by
- * auto-session-name, `/name`, or other extensions).
+ * Also refreshes when the session display name changes via `/name` or
+ * `pi.setSessionName()` (`session_info_changed`), and on `agent_end` if
+ * `pi.getSessionName()` changed (e.g. by auto-session-name).
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
@@ -125,10 +126,21 @@ export default function (pi: ExtensionAPI) {
 		return { action: "continue" as const };
 	});
 
+	// `/name`, RPC, and `pi.setSessionName()` — immediate herdr rename.
+	pi.on("session_info_changed", async (event, ctx) => {
+		if (!ctx.hasUI) return;
+		if (!event.name) return;
+		if (event.name === lastLabel) return;
+		titled = true;
+		await applyLabel(event.name, ctx.cwd, ctx);
+	});
+
+	// Fallback for name changes that land around turn completion.
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!ctx.hasUI) return;
 		const name = pi.getSessionName();
 		if (name && name !== lastLabel) {
+			titled = true;
 			await applyLabel(name, ctx.cwd, ctx);
 		}
 	});

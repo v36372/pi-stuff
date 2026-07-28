@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerBetterNativeBash from "../better-native-pi/bash";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput, JobOutputViewer } from "./index";
 import { sanitizeTerminalOutput } from "./output";
@@ -11,36 +12,50 @@ interface Harness {
 	tools: Map<string, any>;
 	activeTools: Set<string>;
 	commands: Map<string, any>;
-	handlers: Map<string, (...args: any[]) => any>;
+	handlers: Map<string, Array<(...args: any[]) => any>>;
 	statuses: Map<string, string | undefined>;
 	selectCalls: Array<{ title: string; options: string[] }>;
 	notifications: Array<{ message: string; level: string | undefined }>;
 	events: Array<{ name: string; payload: any }>;
 	entryRendererTypes: string[];
 	appendedEntries: Array<{ type: string; data: any }>;
+	overlay: { definition?: any; invalidations: number };
 	ctx: any;
 }
 
 const cleanupGroups = new Set<number>();
+const activeHarnesses: Harness[] = [];
+const shutdownSignals = ["SIGTERM", "SIGHUP", "SIGINT"] as const;
+const initialSignalListeners = new Map(
+	shutdownSignals.map((signal) => [signal, process.listeners(signal)]),
+);
 
-afterEach(() => {
+afterEach(async () => {
+	for (const harness of activeHarnesses.reverse()) await shutdownHarness(harness);
+	activeHarnesses.length = 0;
 	for (const pid of cleanupGroups) {
 		try { process.kill(-pid, "SIGKILL"); } catch { /* Already stopped. */ }
 	}
 	cleanupGroups.clear();
 });
 
-function createHarness(options: { killGraceMs?: number } = {}): Harness {
+interface HarnessOptions {
+	killGraceMs?: number;
+	extensions?: Array<"background-jobs" | "better-native-pi">;
+}
+
+function createHarness(options: HarnessOptions = {}): Harness {
 	const tools = new Map<string, any>();
 	const activeTools = new Set<string>();
 	const commands = new Map<string, any>();
-	const handlers = new Map<string, (...args: any[]) => any>();
+	const handlers = new Map<string, Array<(...args: any[]) => any>>();
 	const statuses = new Map<string, string | undefined>();
 	const selectCalls: Array<{ title: string; options: string[] }> = [];
 	const notifications: Array<{ message: string; level: string | undefined }> = [];
 	const events: Array<{ name: string; payload: any }> = [];
 	const entryRendererTypes: string[] = [];
 	const appendedEntries: Array<{ type: string; data: any }> = [];
+	const overlay: { definition?: any; invalidations: number } = { invalidations: 0 };
 	const ctx = {
 		cwd: process.cwd(),
 		mode: "tui",
@@ -54,21 +69,46 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 				return undefined;
 			},
 		},
-		sessionManager: { getEntries: () => [] },
+		model: { provider: "test-provider", id: "test-model" },
+		thinkingLevel: "high",
+		sessionManager: {
+			getEntries: () => [],
+			getSessionId: () => "test-session-id",
+			getSessionFile: () => "/tmp/test-session.jsonl",
+		},
 	};
 	const pi = {
 		registerTool(definition: any) { tools.set(definition.name, definition); activeTools.add(definition.name); },
 		registerCommand(name: string, definition: any) { commands.set(name, definition); },
 		getActiveTools() { return [...activeTools]; },
+		getThinkingLevel() { return ctx.thinkingLevel; },
 		setActiveTools(names: string[]) { activeTools.clear(); for (const name of names) activeTools.add(name); },
 		registerEntryRenderer(type: string) { entryRendererTypes.push(type); },
-		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+		on(name: string, handler: (...args: any[]) => any) {
+			const registered = handlers.get(name) ?? [];
+			registered.push(handler);
+			handlers.set(name, registered);
+		},
 		appendEntry(type: string, data: any) { appendedEntries.push({ type, data }); },
 		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
 	};
-	registerBackgroundJobs(pi as any, options);
-	registerBetterNativeBash(pi as any);
-	return {
+	for (const extension of options.extensions ?? ["background-jobs", "better-native-pi"]) {
+		if (extension === "better-native-pi") {
+			registerBetterNativeBash(pi as any);
+			continue;
+		}
+		registerBackgroundJobs(pi as any, {
+			killGraceMs: options.killGraceMs,
+			registerOverlayCard(definition: any) {
+				overlay.definition = definition;
+				return {
+					invalidate() { overlay.invalidations += 1; },
+					unregister() {},
+				};
+			},
+		});
+	}
+	const harness = {
 		tools,
 		activeTools,
 		commands,
@@ -79,16 +119,23 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		events,
 		entryRendererTypes,
 		appendedEntries,
+		overlay,
 		ctx,
 	};
+	activeHarnesses.push(harness);
+	return harness;
 }
 
 async function startHarness(harness: Harness): Promise<void> {
-	await harness.handlers.get("session_start")?.({}, harness.ctx);
+	for (const handler of harness.handlers.get("session_start") ?? []) {
+		await handler({}, harness.ctx);
+	}
 }
 
 async function shutdownHarness(harness: Harness): Promise<void> {
-	await harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx);
+	for (const handler of harness.handlers.get("session_shutdown") ?? []) {
+		await handler({ reason: "quit" }, harness.ctx);
+	}
 }
 
 async function waitForPid(path: string): Promise<number> {
@@ -206,6 +253,7 @@ describe("live output refresh", () => {
 
 		const initial = viewer.render(40);
 		expect(initial.join("\n")).toContain("latest-line");
+		expect(initial.join("\n")).toContain("\x1b[2m  │ latest-line\x1b[0m");
 		expect(initial.join("\n")).not.toContain("first-sentinel");
 		expect(initial.length).toBeLessThanOrEqual(Math.max(10, (process.stdout.rows || 24) - 5));
 
@@ -244,6 +292,61 @@ describe("live output refresh", () => {
 });
 
 describe("terminal tools", () => {
+	test("keeps better-native-pi functional without background-jobs", async () => {
+		const harness = createHarness({ extensions: ["better-native-pi"] });
+		await startHarness(harness);
+
+		expect([...harness.tools.keys()]).toEqual(["bash"]);
+		const bash = harness.tools.get("bash");
+		expect(bash.parameters.properties.tty).toBeUndefined();
+		expect(bash.description).not.toContain("managed terminal ID");
+		const result = await bash.execute("exec", {
+			command: "printf standalone-native",
+			reasoning: "verify standalone native Bash",
+		}, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("standalone-native");
+	});
+
+	test("keeps background-jobs functional without better-native-pi", async () => {
+		const harness = createHarness({ extensions: ["background-jobs"] });
+		await startHarness(harness);
+
+		expect([...harness.activeTools]).toEqual(["bash"]);
+		const bash = harness.tools.get("bash");
+		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
+		expect(bash.description).toContain("managed terminal ID");
+		const result = await bash.execute("exec", {
+			command: "printf standalone-managed",
+			reasoning: "verify standalone managed Bash",
+		}, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("standalone-managed");
+	});
+
+	test("integrates the managed schema in either extension load order", async () => {
+		for (const extensions of [
+			["background-jobs", "better-native-pi"],
+			["better-native-pi", "background-jobs"],
+		] as const) {
+			const harness = createHarness({ extensions: [...extensions] });
+			await startHarness(harness);
+			const bash = harness.tools.get("bash");
+			expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
+			expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
+			expect(bash.description).toContain("managed terminal ID");
+			await shutdownHarness(harness);
+		}
+	});
+
+	test("cleans capability ownership across extension reloads", async () => {
+		const styled = createHarness({ extensions: ["better-native-pi"] });
+		await startHarness(styled);
+		await shutdownHarness(styled);
+
+		const managed = createHarness({ extensions: ["background-jobs"] });
+		await startHarness(managed);
+		expect(managed.tools.get("bash").parameters.properties.tty).toMatchObject({ type: "boolean" });
+	});
+
 	test("registers only unified terminal APIs", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
@@ -255,12 +358,21 @@ describe("terminal tools", () => {
 		]);
 		expect([...harness.commands.keys()]).toEqual(["jobs", "ps"]);
 		expect([...harness.activeTools]).toEqual(["bash"]);
+		expect(harness.overlay.definition).toMatchObject({
+			id: "background-jobs",
+			order: 16,
+			width: 58,
+			minTerminalWidth: 90,
+		});
+		expect(harness.overlay.definition.visible()).toBe(false);
 		const bash = harness.tools.get("bash");
 		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
 		expect(bash.description).toContain("long-running commands yield a managed terminal ID");
 		expect(bash.description).toContain("prompts and REPLs");
-		expect(bash.promptGuidelines ?? []).toEqual([]);
+		expect(bash.promptGuidelines).toEqual([
+			"Inspect PI_* environment variables for current model and session details.",
+		]);
 		for (const name of ["job_output", "terminal_write"]) {
 			const tool = harness.tools.get(name);
 			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");
@@ -294,11 +406,50 @@ describe("terminal tools", () => {
 			minimum: 1,
 			maximum: 86_400,
 		});
+		expect(tool.parameters.properties.timeout.description).toContain("Omit to let the command run");
 		await expect(tool.execute("start", {
 			command: "true",
 			reasoning: "validate timeout",
 			timeout: 0.5,
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("must be an integer between 1 and 86400");
+	});
+
+	test("does not install competing process signal listeners", async () => {
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		await harness.tools.get("bash").execute("start", {
+			command: "sleep 2",
+			reasoning: "arm last-resort cleanup",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		try {
+			for (const signal of shutdownSignals) {
+				const initial = initialSignalListeners.get(signal) ?? [];
+				const added = process.listeners(signal).filter((listener) => !initial.includes(listener));
+				expect(added).toEqual([]);
+			}
+		} finally {
+			await shutdownHarness(harness);
+		}
+	});
+
+	test("renders stop calls and results with terminal status styling", () => {
+		const harness = createHarness();
+		const tool = harness.tools.get("job_kill");
+		const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bold: (text: string) => text };
+		const call = tool.renderCall({ job_id: "confirm-app-he-ff5ed8c6" }, theme).render(120).join("\n").trimEnd();
+		const result = tool.renderResult(
+			{
+				content: [{ type: "text", text: "confirm-app-he-ff5ed8c6 is already timed_out." }],
+				details: { status: "timed_out" },
+			},
+			{ expanded: false },
+			theme,
+			{ isError: false },
+		).render(120).join("\n").trimEnd();
+
+		expect(call).toBe("<warning>◌</warning> Stopping confirm-app-he-ff5ed8c6");
+		expect(result).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
 	});
 
 	test("returns quick commands normally and clears persistent status", async () => {
@@ -325,7 +476,55 @@ describe("terminal tools", () => {
 		expect(rendered).not.toContain(result.details.id);
 	});
 
-	test("hides footer status until a command actually yields", async () => {
+	test("exposes current Pi session metadata and removes stale inherited values", async () => {
+		const keys = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"] as const;
+		const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+		for (const key of keys) process.env[key] = `stale-${key}`;
+
+		try {
+			const harness = createHarness();
+			await startHarness(harness);
+			const tool = harness.tools.get("bash");
+			const command = "printf '%s|%s|%s|%s|%s' \"$PI_SESSION_ID\" \"$PI_SESSION_FILE\" \"$PI_PROVIDER\" \"$PI_MODEL\" \"$PI_REASONING_LEVEL\"";
+			const result = await tool.execute("session-env", {
+				command,
+				reasoning: "inspect current session metadata",
+			}, undefined, undefined, harness.ctx);
+			expect(result.content[0].text).toContain(
+				"test-session-id|/tmp/test-session.jsonl|test-provider|test-model|high",
+			);
+
+			harness.ctx.sessionManager.getSessionFile = () => undefined;
+			harness.ctx.model = undefined;
+			harness.ctx.thinkingLevel = undefined;
+			const cleared = await tool.execute("session-env-cleared", {
+				command,
+				reasoning: "verify stale metadata is absent",
+			}, undefined, undefined, harness.ctx);
+			expect(cleared.content[0].text.trim().split("\n").at(-1)).toBe("test-session-id||||");
+		} finally {
+			for (const key of keys) {
+				const value = previous[key];
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	test("forwards extension context through the native foreground bash delegate", async () => {
+		const nativeGuidelines = createBashToolDefinition(process.cwd()).promptGuidelines ?? [];
+		if (!nativeGuidelines.includes("Inspect PI_* environment variables for current model and session details.")) return;
+
+		const harness = createHarness({ extensions: ["better-native-pi"] });
+		await startHarness(harness);
+		const result = await harness.tools.get("bash").execute("foreground-session-env", {
+			command: "printf '%s|%s|%s' \"$PI_SESSION_ID\" \"$PI_MODEL\" \"$PI_REASONING_LEVEL\"",
+			reasoning: "inspect foreground session metadata",
+		}, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("test-session-id|test-model|high");
+	});
+
+	test("shows yielded commands in the overlay instead of the footer", async () => {
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
 		const pending = harness.tools.get("bash").execute("exec", {
@@ -336,10 +535,20 @@ describe("terminal tools", () => {
 		try {
 			await Bun.sleep(50);
 			expect(harness.statuses.get("background-jobs")).toBeUndefined();
+			expect(harness.overlay.definition.visible()).toBe(false);
+			const invalidationsBeforeYield = harness.overlay.invalidations;
 
 			const started = await pending;
 			expect(started.details.status).toBe("running");
-			expect(harness.statuses.get("background-jobs")).toContain("1 background job running");
+			expect(harness.statuses.get("background-jobs")).toBeUndefined();
+			expect(harness.overlay.definition.visible()).toBe(true);
+			expect(harness.overlay.invalidations).toBeGreaterThan(invalidationsBeforeYield);
+			const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+			expect(harness.overlay.definition.title(theme)).toContain("Jobs ● 1 running · /ps");
+			const body = harness.overlay.definition.renderBody(54, 7, theme).join("\n");
+			expect(body).toContain("test foreground status");
+			expect(body).not.toContain(started.details.id);
+			expect(body).toContain("sleep 2");
 		} finally {
 			await shutdownHarness(harness);
 		}
@@ -358,7 +567,8 @@ describe("terminal tools", () => {
 		expect(started.content[0].text).toContain("first");
 		expect(started.content[0].text).toContain(`Use terminal_write or job_output with job_id=${started.details.id}`);
 		expect([...harness.activeTools]).toEqual(["bash", "other_tool", "job_output", "terminal_write", "job_kill"]);
-		expect(harness.statuses.get("background-jobs")).toContain("1 background job running");
+		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.overlay.definition.visible()).toBe(true);
 
 		const finished = await harness.tools.get("terminal_write").execute("poll", {
 			job_id: started.details.id,
@@ -369,6 +579,7 @@ describe("terminal tools", () => {
 		expect(finished.details.observedAt).toBeGreaterThanOrEqual(started.details.observedAt);
 		expect(finished.content[0].text).toContain("second");
 		expect(finished.content[0].text).not.toContain("\nfirst");
+		expect(harness.overlay.definition.visible()).toBe(false);
 		expect(harness.events).toHaveLength(0);
 		expect(harness.notifications).toHaveLength(0);
 
@@ -430,9 +641,10 @@ describe("terminal tools", () => {
 			theme,
 			{ args: { reasoning: "answer the test prompt", job_id: started.details.id, chars: "hello\n" } },
 		).render(200).join("\n");
-		expect(rendered).toContain("<success>•</success> Interacted with <dim>");
-		expect(rendered).toContain("</dim> <dim>to</dim> <accent>answer the test prompt</accent>");
-		expect(rendered).toContain("│ </dim>got:hello");
+		expect(rendered).toContain("<success>•</success> Interacted with <mdHeading>");
+		expect(rendered).toContain("</mdHeading> <dim>to</dim> <accent>answer the test prompt</accent>");
+		expect(rendered).toContain("\x1b[2m  │ got:hello");
+		expect(rendered).not.toContain("<dim>  │ </dim>");
 		expect(rendered).not.toContain("↪");
 		expect(rendered).not.toContain("↳");
 	});
@@ -647,12 +859,11 @@ describe("terminal tools", () => {
 		component.dispose?.();
 	});
 
-	test("last-resort reaper SIGKILLs a trap-TERM orphan on ungraceful exit", async () => {
-		// Regression: when pi exits without firing session_shutdown (crash,
-		// emergencyTerminalExit, SIGKILL of pi), a running job that ignores
-		// SIGTERM (`trap '' TERM`) was re-parented to PID 1 and leaked forever.
-		// background-jobs now registers every live job pid and SIGKILLs the whole
-		// process tree from process 'exit'.
+	test("last-resort reaper SIGKILLs a trap-TERM orphan on hard exit", async () => {
+		// Regression: when pi exits without completing session_shutdown (crash or
+		// emergencyTerminalExit), a running job that ignores SIGTERM was
+		// re-parented to PID 1 and leaked forever. background-jobs registers every
+		// live job pid and SIGKILLs the whole process tree from process 'exit'.
 		// We can't call session_shutdown (that's the graceful path). Instead, emit
 		// the sync 'exit' event the way Node does on process.exit() and assert no
 		// orphan survives.
@@ -677,8 +888,8 @@ describe("terminal tools", () => {
 		const before = ps1.stdout.trim().split("\n").filter(Boolean);
 		expect(before.length).toBeGreaterThan(0);
 
-		// Simulate an ungraceful exit: Node emits 'exit' synchronously on
-		// process.exit(). Our reaper is registered on that event.
+		// Simulate a hard process.exit() path. The fallback is synchronous and
+		// deliberately separate from normal signal-driven session shutdown.
 		process.emit("exit", 0);
 
 		// Give the kernel a beat to reap.
@@ -720,9 +931,11 @@ describe("background terminal UX", () => {
 		expect(list?.options.join("\n")).toContain("recent-two");
 
 		await harness.commands.get("jobs").handler("stop all", harness.ctx);
-		expect(harness.statuses.get("background-jobs")).toContain("2 background jobs running");
+		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.overlay.definition.visible()).toBe(true);
 		await shutdownHarness(harness);
 		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.overlay.definition.visible()).toBe(false);
 	}, 3_000);
 
 	test("waits for SIGKILL escalation during shutdown", async () => {
@@ -774,28 +987,28 @@ describe("background terminal UX", () => {
 		}
 	}, 3_000);
 
-	test("applies a default hard timeout when none is provided", async () => {
+	test("omitted timeout leaves yielded commands running past the former deadline", async () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
-		// No `timeout` passed: the extension must still kill a stuck process
-		// via the 10s default. We don't wait the full 10s here; we just assert
-		// the timer is armed (job is timed_out after it fires). Use a fast-dying
-		// command first to confirm normal flow still works, then assert the
-		// default applies by checking the timeout field is populated on a stuck job.
-		const quick = await harness.tools.get("bash").execute("start", {
-			command: "printf done\\n",
-			reasoning: "quick command with no explicit timeout",
+		const started = await harness.tools.get("bash").execute("start", {
+			command: "while :; do sleep 1; done",
+			reasoning: "verify no implicit hard timeout",
 			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
-		const quickDone = await harness.tools.get("job_output").execute("output", {
-			reasoning: "read quick result",
-			job_id: quick.details.id,
-			wait: true,
-		});
-		expect(quickDone.details.status).toBe("completed");
-		expect(quickDone.details.exitCode).toBe(0);
-	});
+		try {
+			expect(started.details.status).toBe("running");
+			await Bun.sleep(10_250);
+			const polled = await harness.tools.get("job_output").execute("output", {
+				reasoning: "check terminal after former timeout",
+				job_id: started.details.id,
+			});
+			expect(polled.details.status).toBe("running");
+			expect(polled.content[0].text).toContain("still running");
+		} finally {
+			await shutdownHarness(harness);
+		}
+	}, 12_000);
 
 	test("wait:true is bounded and returns 'still running' instead of blocking forever", async () => {
 		if (process.platform === "win32") return;
