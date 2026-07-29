@@ -596,6 +596,22 @@ describe('Grok CLI provider registration', () => {
     expect(loadQuotaCache().accounts['grok-cli']).toBeUndefined();
   });
 
+  it('allows official credential reuse only for the permanent base account', async () => {
+    saveTestAccounts();
+    const extension = await setupExtension();
+    const callbacks = {} as OAuthLoginCallbacks;
+
+    await extension.providers.get('grok-cli')?.oauth?.login(callbacks);
+    await extension.providers.get('grok-cli-2')?.oauth?.login(callbacks);
+
+    expect(mockOauthLogin).toHaveBeenNthCalledWith(1, callbacks, {
+      reuseGrokBuildLogin: true,
+    });
+    expect(mockOauthLogin).toHaveBeenNthCalledWith(2, callbacks, {
+      reuseGrokBuildLogin: false,
+    });
+  });
+
   it('makes a recently exhausted account eligible after successful OAuth login', async () => {
     saveTestAccounts('grok-cli');
     const extension = await setupExtension();

@@ -12,7 +12,7 @@
 
 Use your X Premium or SuperGrok subscription in [pi](https://pi.dev/) with a clean, focused toolset.
 
-- **OAuth login:** Sign in through a browser or device code with automatic token refresh.
+- **OAuth login:** Sign in through a browser or device code, or reuse an official Grok Build login, with automatic token refresh.
 - **Multiple accounts:** Manage accounts and quotas from the terminal or browser dashboard, and automatically continue with another account when quota runs out.
 - **Usage tracking:** Check account limits, remaining credits, and reset times.
 - **Image generation:** Generate images directly or let Grok use the `image_gen` tool.
@@ -46,6 +46,7 @@ Choose **Grok CLI**, then select one of these methods:
 
 - **Browser login (default):** Opens xAI authorization in your browser. If xAI shows a one-time code, paste it back into pi.
 - **Device code login:** Displays a URL and short code for SSH, containers, and other headless environments.
+- **Use existing Grok Build login:** Appears for the permanent base `grok-cli` account when a valid official `~/.grok/auth.json` entry is available. Numbered account aliases require a fresh browser or device-code login. The file is read-only to this extension.
 
 ### 3. Select a model
 
@@ -157,7 +158,7 @@ Extension-owned data is grouped under `~/.pi/grok-cli/`:
 └── quota-cache.json
 ```
 
-`config.json` stores settings and account labels. The cache files store derived vision descriptions and quota responses. None contain OAuth tokens; pi stores credentials separately. Legacy settings are migrated automatically.
+`config.json` stores settings and account labels. The cache files store derived vision descriptions and quota responses. None contain OAuth tokens; pi stores credentials separately. The official `~/.grok/auth.json` file remains read-only to this extension. Legacy settings are migrated automatically.
 
 ### Common environment variables
 

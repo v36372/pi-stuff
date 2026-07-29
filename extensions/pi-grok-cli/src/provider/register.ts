@@ -27,7 +27,9 @@ export default function registerGrokCli(pi: ExtensionAPI) {
       usesCallbackServer: true,
 
       async login(callbacks) {
-        const credentials = await oauth.login(callbacks);
+        const credentials = await oauth.login(callbacks, {
+          reuseGrokBuildLogin: account.provider === 'grok-cli',
+        });
         await removeQuotaUsage(account.provider).catch(() => undefined);
         exhaustionRotation.clearRecentExhaustion(account.provider);
         return credentials;

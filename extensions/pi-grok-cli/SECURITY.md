@@ -19,7 +19,7 @@ The maintainer aims to acknowledge a complete report within 7 calendar days and 
 ## Security boundaries
 
 - pi-grok-cli and its tools run with the user's operating-system permissions. File and shell tools can access any path those permissions allow, including paths outside the workspace, and can execute commands when the model invokes them.
-- OAuth credentials returned by this extension are stored and refreshed by pi. pi-grok-cli does not read or modify Grok Build credentials.
+- OAuth credentials returned by this extension are stored and refreshed by pi. pi-grok-cli may read the verified official Grok CLI entry in `~/.grok/auth.json`, but never writes to that file.
 - Browser OAuth starts a temporary callback server on `127.0.0.1:56122` by default and falls back to an ephemeral port. `PI_GROK_CLI_CALLBACK_HOST` can bind it to another interface. The server validates the callback path and OAuth state and closes after login. Treat complete callback URLs and authorization codes as sensitive.
 - `/grok-cli-accounts gui` starts a temporary account-management server bound only to an OS-assigned `127.0.0.1` port. A random capability URL bootstraps a session cookie; subsequent mutations require same-origin and CSRF validation. The page receives account labels, status, and quota data. It never receives stored OAuth credentials, callback URLs, or environment-token values; a manually entered one-time authorization code is handled transiently during login and is never returned by `/api/state`. Treat the private dashboard URL as sensitive and do not share it while the server is running.
 - Prompts, conversation context, tool definitions, tool results, and native image inputs are sent to the configured Grok CLI proxy.
