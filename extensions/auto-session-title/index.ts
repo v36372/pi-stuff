@@ -13,6 +13,7 @@ import {
 	type TitleContext,
 	type TitleState,
 } from "./context";
+import { syncTitleToHerdr } from "./herdr";
 import { requestTitleCompletion } from "./request";
 
 export function titleModelConfigPath(): string {
@@ -160,6 +161,9 @@ export default function (pi: ExtensionAPI) {
 		managedTitle = title;
 		programmaticTitle = title;
 		pi.setSessionName(title);
+		void syncTitleToHerdr(title).then((target) => {
+			if (target) debug("herdr label synced", { title, target });
+		});
 		debug("session renamed", title);
 	};
 
@@ -352,6 +356,14 @@ export default function (pi: ExtensionAPI) {
 		restoreSummaryState(ctx);
 		debug("session start", { title: managedTitle, focusSummary: lastFocusSummary, entries: ctx.sessionManager.getEntries().length });
 
+		// Resume/reload may already have a durable Pi title; push it to Herdr labels
+		// immediately so the tab/pane name matches without waiting for another turn.
+		if (managedTitle) {
+			void syncTitleToHerdr(managedTitle).then((target) => {
+				if (target) debug("herdr label restored", { title: managedTitle, target });
+			});
+		}
+
 		// `/reload` is the common way to pick up extension fixes while staying in the
 		// same conversation. Retitle once after reload so stale titles like the first
 		// greeting do not stick around until another full assistant turn settles.
@@ -397,6 +409,10 @@ export default function (pi: ExtensionAPI) {
 		managedTitle = event.name;
 		manualTitleLocked = true;
 		cancelRequest();
+		// Manual `/name` still updates Herdr labels; only auto-generation is locked.
+		void syncTitleToHerdr(event.name).then((target) => {
+			if (target) debug("herdr label synced from manual rename", { title: event.name, target });
+		});
 		debug("manual title lock", event.name);
 	});
 

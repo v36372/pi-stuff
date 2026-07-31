@@ -14,6 +14,35 @@ before:  untitled
 after:   Compact Pi Footer
 ```
 
+## Herdr labels
+
+When Pi is running inside a Herdr-managed pane (`HERDR_ENV=1`), each applied title
+is also pushed to Herdr:
+
+- **Sole pane in the tab** → renames the **tab** (`herdr tab rename`)
+- **Multiple panes in the tab** → renames this **pane** (`herdr pane rename`)
+- **Agents sidebar** → `display_agent` + `title` = session name, token `kind` = `pi`
+
+On session start/resume, an existing Pi session name is restored to the same
+targets so labels match without waiting for another turn. Sync is best-effort and
+never interrupts the agent if Herdr is unavailable.
+
+Recommended Agents sidebar layout (session title highlighted, kind on the next
+line; no workspace/cwd/tab duplication):
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", { token = "agent", bold = true, dim = false, fg = "#7aa2f7" }],
+  [{ token = "$kind", dim = true }],
+]
+```
+
+Herdr paints agent/custom tokens dim by default. You must set `dim = false` on the
+session-title token or the accent color stays washed out.
+
+Reload Herdr config after editing: `herdr server reload-config`.
+
 ## Context and persistence
 
 The title request never receives reasoning, tool calls, tool results, logs, or
