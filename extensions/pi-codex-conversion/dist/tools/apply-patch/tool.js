@@ -1,0 +1,170 @@
+import { Type } from "typebox";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { Container, Text } from "@earendil-works/pi-tui";
+import { parsePatchActions } from "../../patch/parser.js";
+import { resolvePatchPath } from "../../patch/paths.js";
+import { ExecutePatchError } from "../../patch/types.js";
+import { formatPatchTarget } from "./rendering.js";
+import { executePatchWithRust } from "./executor.js";
+import { clearApplyPatchRenderState, isApplyPatchToolDetails, markApplyPatchFailure, markApplyPatchPartialFailure, renderApplyPatchCallFromState, setApplyPatchRenderState, } from "./render-state.js";
+const APPLY_PATCH_PARAMETERS = Type.Object({
+    input: Type.String({
+        description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. Order each file's hunks top-to-bottom; indentation is literal",
+    }),
+});
+function parseApplyPatchParams(params) {
+    if (!params || typeof params !== "object" || !("input" in params) || typeof params.input !== "string") {
+        throw new Error("apply_patch requires a string 'input' parameter");
+    }
+    return { patchText: params.input };
+}
+function prepareApplyPatchArguments(args) {
+    if (args && typeof args === "object") {
+        if ("input" in args && typeof args.input === "string")
+            return { input: args.input };
+        if ("patchText" in args && typeof args.patchText === "string")
+            return { input: args.patchText };
+        if ("patch" in args && typeof args.patch === "string")
+            return { input: args.patch };
+    }
+    return args;
+}
+function summarizePatchCounts(result) {
+    return [
+        `changed ${result.changedFiles.length} file${result.changedFiles.length === 1 ? "" : "s"}`,
+        `created ${result.createdFiles.length}`,
+        `deleted ${result.deletedFiles.length}`,
+        `moved ${result.movedFiles.length}`,
+    ].join(", ");
+}
+function uniqueStrings(values) {
+    return Array.from(new Set(values.filter((value) => typeof value === "string" && value.length > 0)));
+}
+function getFailedPaths(error) {
+    return uniqueStrings(error.failures.flatMap(({ action }) => [action.path, action.type === "update" ? action.movePath : undefined]));
+}
+function getAppliedPaths(result, failedFiles) {
+    return result.changedFiles.filter((path) => !failedFiles.includes(path));
+}
+function touchedPatchPaths(cwd, patchText) {
+    try {
+        const paths = parsePatchActions({ text: patchText }).flatMap((action) => [action.path, action.movePath]);
+        return [...new Set(paths.filter((path) => !!path).map((patchPath) => resolvePatchPath({ cwd, patchPath })))].sort();
+    }
+    catch {
+        // The Rust helper remains authoritative for malformed patch errors.
+        return [];
+    }
+}
+async function withTouchedFileMutationQueues(cwd, patchText, fn) {
+    const paths = touchedPatchPaths(cwd, patchText);
+    const run = (index) => index >= paths.length
+        ? fn()
+        : withFileMutationQueue(paths[index], () => run(index + 1));
+    return run(0);
+}
+function buildPartialFailureMessage(message, failedFiles, appliedFiles) {
+    const lines = [message];
+    if (failedFiles.length > 0) {
+        lines.push(`Failed file${failedFiles.length === 1 ? "" : "s"}: ${failedFiles.join(", ")}`);
+        lines.push(`Recovery: MUST read ${failedFiles.join(", ")} before retrying`);
+    }
+    if (appliedFiles.length > 0) {
+        lines.push("Earlier file actions in this patch were already applied");
+        lines.push("Recovery: MUST NOT reread other files from this patch unless a specific dependency requires it");
+    }
+    return lines.join("\n");
+}
+function addPatchRetryHint(message, cause) {
+    if (!cause.startsWith("Failed to find expected lines"))
+        return message;
+    return `${message}\nRecovery: order each Update File's hunks top-to-bottom and copy exact indentation before retrying`;
+}
+function describeFailedActions(error, cwd) {
+    return uniqueStrings(error.failures.map(({ action }) => formatPatchTarget(action.path, action.type === "update" ? action.movePath : undefined, cwd)));
+}
+export { clearApplyPatchRenderState };
+const renderApplyPatchCallWithOptionalContext = (args, theme, context, options = {}) => new Text(renderApplyPatchCallFromState(args, theme, { ...context, showCollapsedDiff: options.showDiffWhenCollapsed }), 0, 0);
+export function createApplyPatchTool(options = {}) {
+    return {
+        name: "apply_patch",
+        label: "apply_patch",
+        description: "Patch files",
+        ...(options.promptSnippet === false ? {} : { promptSnippet: "Edit files with patch" }),
+        parameters: APPLY_PATCH_PARAMETERS,
+        executionMode: "sequential",
+        prepareArguments: prepareApplyPatchArguments,
+        async execute(toolCallId, params, signal, _onUpdate, ctx) {
+            if (signal?.aborted)
+                throw new Error("apply_patch aborted");
+            const typedParams = parseApplyPatchParams(params);
+            setApplyPatchRenderState(toolCallId, typedParams.patchText, ctx.cwd);
+            let result;
+            try {
+                result = await withTouchedFileMutationQueues(ctx.cwd, typedParams.patchText, () => executePatchWithRust({ cwd: ctx.cwd, patchText: typedParams.patchText, signal, customRustBinariesDir: options.customRustBinariesDir }));
+            }
+            catch (error) {
+                if (error instanceof ExecutePatchError) {
+                    const partial = error.hasPartialSuccess();
+                    const failedTargets = describeFailedActions(error, ctx.cwd);
+                    const failedTargetSummary = failedTargets.join(", ");
+                    const prefix = partial ? `apply_patch partially failed after ${summarizePatchCounts(error.result)}` : "apply_patch failed";
+                    const rawMessage = failedTargetSummary ? `${prefix} while patching ${failedTargetSummary}: ${error.message}` : `${prefix}: ${error.message}`;
+                    const message = addPatchRetryHint(rawMessage, error.message);
+                    if (partial) {
+                        const failedFiles = getFailedPaths(error);
+                        const appliedFiles = getAppliedPaths(error.result, failedFiles);
+                        const recoveryMessage = buildPartialFailureMessage(message, failedFiles, appliedFiles);
+                        markApplyPatchPartialFailure(toolCallId, failedTargets);
+                        return {
+                            content: [{ type: "text", text: recoveryMessage }],
+                            details: {
+                                status: "partial_failure",
+                                result: error.result,
+                                error: recoveryMessage,
+                                failedTargets,
+                                appliedFiles,
+                                failedFiles,
+                                recoveryInstructions: { mustReadFiles: [...failedFiles], mustNotReadFiles: [...appliedFiles] },
+                            },
+                        };
+                    }
+                    markApplyPatchFailure(toolCallId, "failed", failedTargets);
+                    throw new Error(message);
+                }
+                markApplyPatchFailure(toolCallId, "failed");
+                throw error;
+            }
+            const summary = [
+                "Applied patch successfully",
+                `Changed files: ${result.changedFiles.length}`,
+                `Created files: ${result.createdFiles.length}`,
+                `Deleted files: ${result.deletedFiles.length}`,
+                `Moved files: ${result.movedFiles.length}`,
+                `Fuzz: ${result.fuzz}`,
+            ].join("\n");
+            return { content: [{ type: "text", text: summary }], details: { status: "success", result } };
+        },
+        renderCall: ((args, theme, context) => renderApplyPatchCallWithOptionalContext(args, theme, context, options)),
+        renderResult(result, { isPartial }, theme) {
+            if (isPartial)
+                return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
+            if (!isApplyPatchToolDetails(result.details))
+                return new Container();
+            if (result.details.status === "partial_failure")
+                return new Container();
+            return new Container();
+        },
+    };
+}
+export function registerApplyPatchTool(pi, options = {}) {
+    pi.registerTool(createApplyPatchTool(options));
+}
+export function registerApplyPatchResultEvent(pi) {
+    pi.on("tool_result", (event) => {
+        if (event.toolName === "apply_patch" && isApplyPatchToolDetails(event.details) && event.details.status === "partial_failure") {
+            return { isError: true };
+        }
+        return undefined;
+    });
+}
