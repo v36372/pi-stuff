@@ -21,6 +21,7 @@ import {
 	LIVE_REFRESH_FALLBACK_MS,
 } from "./refresh.js";
 import {
+	BASH_MANAGED_TERMINAL_GUIDELINE,
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBackgroundTerminalService,
 	hasBetterNativeBashIntegration,
@@ -124,6 +125,7 @@ function outputBytesForTokens(tokens?: number): number {
 	return Math.min(tokens * BYTES_PER_TOKEN, MAX_OUTPUT_BYTES);
 }
 const KILL_GRACE_MS = 5_000;
+const PROCESS_GROUP_POLL_MS = 100;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
 const DEFAULT_YIELD_MS = 10_000;
 const DEFAULT_POLL_MS = 5_000;
@@ -188,6 +190,7 @@ interface ManagedJob {
 	pendingClose?: { code: number | null; signal: NodeJS.Signals | null };
 	timeout?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
+	processGroupMonitor?: ReturnType<typeof setInterval>;
 	completion: Promise<void>;
 	resolveCompletion: () => void;
 	finalized: boolean;
@@ -683,6 +686,15 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (!pid) return false;
 		try { process.kill(pid, 0); return true; } catch { return false; }
 	};
+	const processGroupExists = (pid: number | undefined): boolean => {
+		if (process.platform === "win32" || !pid) return false;
+		try {
+			process.kill(-pid, 0);
+			return true;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code === "EPERM";
+		}
+	};
 	let finalize!: (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => void;
 	const requestKill = (job: ManagedJob, reason: ManagedJob["killReason"]) => {
 		if (!isActive(job) || job.killReason) return false;
@@ -709,6 +721,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		job.signal = signal ?? undefined;
 		if (job.timeout) clearTimeout(job.timeout);
 		if (job.killTimer) clearTimeout(job.killTimer);
+		if (job.processGroupMonitor) clearInterval(job.processGroupMonitor);
 		if (spawnError) {
 			appendOutput(job, "stderr", Buffer.from(`${job.stderr.text() ? "\n" : ""}${spawnError.message}\n`));
 			job.status = "failed";
@@ -793,8 +806,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			finalize(job, null, null, error);
 		});
 		job.process.once("close", (code, signal) => {
-			untrackJobPid(job.process?.pid);
+			const wrapperPid = job.process?.pid;
 			if (job.ptyPid && pidExists(job.ptyPid)) {
+				untrackJobPid(wrapperPid);
 				job.pendingClose = { code, signal };
 				if (!job.killReason) {
 					job.killReason = "shutdown";
@@ -805,6 +819,20 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				return;
 			}
 			untrackJobPid(job.ptyPid);
+			if (processGroupExists(wrapperPid)) {
+				// A shell command can exit after starting `command &`. Keep its process
+				// group managed instead of declaring success and leaking descendants.
+				job.pendingClose = { code, signal };
+				const settleWhenEmpty = () => {
+					if (processGroupExists(wrapperPid)) return;
+					untrackJobPid(wrapperPid);
+					finalize(job, code, signal);
+				};
+				job.processGroupMonitor = setInterval(settleWhenEmpty, PROCESS_GROUP_POLL_MS);
+				job.processGroupMonitor.unref?.();
+				return;
+			}
+			untrackJobPid(wrapperPid);
 			finalize(job, code, signal);
 		});
 		if (timeoutSeconds !== undefined) {
@@ -1016,7 +1044,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			label: "bash",
 			description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.",
 			promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
-			promptGuidelines: [BASH_SESSION_ENV_GUIDELINE],
+			promptGuidelines: [BASH_SESSION_ENV_GUIDELINE, BASH_MANAGED_TERMINAL_GUIDELINE],
 			parameters: {
 				type: "object",
 				properties: {

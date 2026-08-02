@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth } from "@earendil-works/pi-tui";
 import {
+	BASH_MANAGED_TERMINAL_GUIDELINE,
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBetterNativeBashIntegration,
 	getBackgroundTerminalService,
@@ -325,7 +326,9 @@ export default function bash(pi: ExtensionAPI) {
 					: bashTool.description,
 				promptSnippet: bashTool.promptSnippet,
 				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
-				promptGuidelines: bashTool.promptGuidelines ?? [BASH_SESSION_ENV_GUIDELINE],
+				promptGuidelines: terminalEnabled
+					? [...(bashTool.promptGuidelines ?? [BASH_SESSION_ENV_GUIDELINE]), BASH_MANAGED_TERMINAL_GUIDELINE]
+					: bashTool.promptGuidelines,
 				renderShell: "self",
 				execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
 					const terminal = getBackgroundTerminalService();

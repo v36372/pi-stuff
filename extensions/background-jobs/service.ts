@@ -1,4 +1,5 @@
 export const BASH_SESSION_ENV_GUIDELINE = "Inspect PI_* environment variables for current model and session details.";
+export const BASH_MANAGED_TERMINAL_GUIDELINE = "Run long-lived commands in the foreground and let bash yield a managed terminal ID; do not use shell self-backgrounding such as &, nohup, disown, or setsid.";
 
 export interface BackgroundTerminalView {
 	details: any;

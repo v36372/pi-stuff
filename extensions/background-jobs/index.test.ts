@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -156,6 +157,24 @@ function processGroupExists(pid: number): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function processExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function processGroupId(pid: number): number {
+	const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" });
+	return Number.parseInt(result.stdout.trim(), 10);
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
 describe("bounded terminal output", () => {
@@ -372,6 +391,7 @@ describe("terminal tools", () => {
 		expect(bash.description).toContain("prompts and REPLs");
 		expect(bash.promptGuidelines).toEqual([
 			"Inspect PI_* environment variables for current model and session details.",
+			"Run long-lived commands in the foreground and let bash yield a managed terminal ID; do not use shell self-backgrounding such as &, nohup, disown, or setsid.",
 		]);
 		for (const name of ["job_output", "terminal_write"]) {
 			const tool = harness.tools.get(name);
@@ -396,6 +416,57 @@ describe("terminal tools", () => {
 		});
 		expect(harness.entryRendererTypes).not.toContain("background-job");
 	});
+
+	test("keeps shell-backgrounded descendants managed through shutdown", async () => {
+		if (process.platform === "win32") return;
+		const directory = await mkdtemp(join(tmpdir(), "pi-background-descendant-"));
+		const pidPath = join(directory, "child.pid");
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		try {
+			const result = await harness.tools.get("bash").execute("start", {
+				command: `sleep 60 >/dev/null 2>&1 & printf '%s\\n' "$!" > ${shellQuote(pidPath)}`,
+				reasoning: "verify escaped descendant tracking",
+				"yield-time_ms": 250,
+			}, undefined, undefined, harness.ctx);
+			const childPid = await waitForPid(pidPath);
+			const groupId = processGroupId(childPid);
+			expect(Number.isInteger(groupId)).toBe(true);
+			cleanupGroups.add(groupId);
+
+			expect(result.details.status).toBe("running");
+			expect(result.content[0].text).toContain("is still running");
+			expect(processExists(childPid)).toBe(true);
+
+			await shutdownHarness(harness);
+			for (let attempt = 0; attempt < 100 && processExists(childPid); attempt += 1) {
+				await Bun.sleep(10);
+			}
+			expect(processExists(childPid)).toBe(false);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 5000);
+
+	test("settles after a shell-backgrounded process group exits naturally", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		const started = await harness.tools.get("bash").execute("start", {
+			command: "sleep 1 >/dev/null 2>&1 &",
+			reasoning: "verify descendant completion",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		expect(started.details.status).toBe("running");
+
+		const completed = await harness.tools.get("job_output").execute("output", {
+			reasoning: "wait for descendant completion",
+			job_id: started.details.id,
+			wait: true,
+			waitMs: 2000,
+		});
+		expect(completed.details.status).toBe("completed");
+	}, 5000);
 
 	test("requires integer timeout seconds in schema and execution", async () => {
 		const harness = createHarness();
