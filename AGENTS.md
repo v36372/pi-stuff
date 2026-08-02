@@ -75,6 +75,14 @@ ffmpeg -version
 - If it works → proceed
 - If it fails → inform the user and suggest installation
 
+On exe.dev, before asking the user for API tokens (Cloudflare, GitHub, Discord, …), check attached integrations first:
+
+```bash
+curl -sS https://reflection.int.exe.xyz/integrations
+```
+
+Use the listed `*.int.exe.xyz` hostnames (credentials are injected at the edge). Details live in `~/.config/shelley/AGENTS.md`.
+
 ## Verify
 
 Don't just write code and hope it works — verify as you go, and never claim success without proof.
