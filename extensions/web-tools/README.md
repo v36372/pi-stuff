@@ -5,6 +5,8 @@ Pi extension that registers two public-web tools:
 - `webfetch` — fetch one public URL as markdown, text, html, or an inline raster image
 - `websearch` — search the public web for current information and candidate URLs
 
+Both tools are inactive while an `openai-codex` model is selected because that provider has its own web tooling. Switching to another provider restores whichever web tools were active before the switch.
+
 ## Tools
 
 ### `webfetch`
