@@ -16,7 +16,9 @@ export function resolveWorkdir(baseCwd, workdir) {
     return workdir ? resolve(baseCwd, workdir) : baseCwd;
 }
 export function resolveShell(shell) {
-    return shell ? getCodexRuntimeShell(shell) : getDefaultCodexRuntimeShell();
+    if (!shell || (process.platform === "win32" && /^(?:bash|bash\.exe)$/i.test(shell)))
+        return getDefaultCodexRuntimeShell();
+    return getCodexRuntimeShell(shell);
 }
 function shellEscape(value) {
     if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value))

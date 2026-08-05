@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { generateDiffString } from "@earendil-works/pi-coding-agent";
-import { buildToolBlock, REASONING_DESCRIPTION, withReasoning } from "./core.js";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { buildToolBlock, renderCommandOutput, REASONING_DESCRIPTION, withReasoning } from "./core.js";
 
 const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
 const TEST_TAG_PATTERN = /<\/?(?:bold|green|magenta|red)>|<\/>/g;
@@ -23,6 +24,23 @@ describe("withReasoning", () => {
 		expect(REASONING_DESCRIPTION).toContain("≤8-word");
 		expect(REASONING_DESCRIPTION).toContain("No period");
 		expect(REASONING_DESCRIPTION.length).toBeLessThanOrEqual(100);
+	});
+});
+
+describe("renderCommandOutput", () => {
+	test("keeps collapsed omission markers within narrow terminal widths", () => {
+		for (const rowCount of [18, 101]) {
+			const output = Array.from(
+				{ length: rowCount },
+				(_, index) => `line ${index + 1}`,
+			).join("\n");
+
+			for (const width of [44, 46]) {
+				const lines = renderCommandOutput(output, width, { maxRows: 2 });
+				expect(lines).toHaveLength(2);
+				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+			}
+		}
 	});
 });
 

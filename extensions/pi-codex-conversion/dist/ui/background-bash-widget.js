@@ -1,3 +1,4 @@
+import { renderTerminalOutput } from "../tools/exec/output.js";
 export const BACKGROUND_BASH_WIDGET_ID = "codex-background-bashes";
 const OUTPUT_TAIL_CHARS = 4_000;
 function truncate(text, maxLength) {
@@ -58,7 +59,7 @@ export function renderBackgroundBashWidget(ctx, state, sessions) {
     ];
     if (!state.folded) {
         lines.push(`${theme.fg("muted", "│ $")} ${truncate(active.command, 120)}`);
-        const output = active.outputTail.trimEnd();
+        const output = renderTerminalOutput(active.outputTail).trimEnd();
         if (output) {
             for (const line of output.split("\n").slice(-6)) {
                 lines.push(`${theme.fg("muted", "│")} ${theme.fg("dim", truncate(line, 160))}`);

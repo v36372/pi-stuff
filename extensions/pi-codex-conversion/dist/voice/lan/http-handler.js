@@ -51,7 +51,7 @@ export async function handleLanVoiceHttpRequest(request, response, handlers) {
         }
         const clientId = requiredClientId(body);
         if (path === "/api/stop") {
-            handlers.clients.release(clientId);
+            handlers.clients.release(clientId, undefined, body["terminateConversation"] === true);
             sendJson(response, 200, { ok: true });
             return;
         }

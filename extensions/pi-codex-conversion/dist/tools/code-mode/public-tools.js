@@ -3,7 +3,7 @@ import { DEFAULT_CODE_MODE_OUTPUT_TOKENS, MAX_CODE_MODE_OUTPUT_TOKENS, } from ".
 import { EXEC_DESCRIPTION, WAIT_DESCRIPTION, } from "./custom-tool-prompt.js";
 import { createCodeModeRenderTracker } from "./render-tracker.js";
 import { renderExecCall, renderTrackedCodeModeResult, renderWaitCall, } from "./rendering.js";
-import { toCodeModeToolResult } from "./tool-result.js";
+import { formatRunningExecSessionGuidance, toCodeModeToolResult, } from "./tool-result.js";
 import { CODE_MODE_EXEC_CONSTRAINED_SAMPLING } from "./exec-contract.js";
 const DEFAULT_WAIT_MS = 10_000;
 const MIN_ADAPTIVE_WAIT_MS = 5_000;
@@ -154,7 +154,7 @@ async function continueExecSessionFromMistakenWait(cellId, yieldTimeMs, maxOutpu
                     ? [
                         {
                             type: "text",
-                            text: `exec_command session ${sessionId} is still running. Continue with exec and tools.write_stdin({ session_id: ${sessionId} })`,
+                            text: formatRunningExecSessionGuidance(sessionId),
                         },
                     ]
                     : []),

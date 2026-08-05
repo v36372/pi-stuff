@@ -24,7 +24,7 @@ function clearAbsentOwnedOptionals(document, owned) {
     const ownedVoice = isRecord(owned["voice"]) ? owned["voice"] : undefined;
     if (!voice || !ownedVoice)
         return;
-    for (const key of ["inputDevice", "outputDevice"])
+    for (const key of ["contextModel", "inputDevice", "outputDevice"])
         if (!(key in ownedVoice))
             delete voice[key];
 }

@@ -34,10 +34,10 @@ export function toNestedTool(tool, usage, lifecycle = {}, contract = {}) {
             context.refreshTrace?.();
             try {
                 const result = await tool.execute(toolCallId, prepared, signal, (update) => forwardUpdate(update, context), extensionContext);
-                context.captureResult?.(result);
                 const resultError = contract.resultError?.(result);
                 if (resultError)
                     throw new Error(resultError);
+                context.captureResult?.(result);
                 return contract.resultValue?.(result) ?? compactNestedResult(result);
             }
             finally {

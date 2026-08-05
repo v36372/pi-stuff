@@ -1,16 +1,20 @@
-import { CONFIG_DIR_NAME, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getSettingsListTheme, } from "@earendil-works/pi-coding-agent";
 import { SettingsList, truncateToWidth } from "@earendil-works/pi-tui";
-import { getCodexConversionConfigPath, readCodexConversionConfig } from "../../adapter/activation/config-store.js";
+import { getCodexConversionConfigPath, readCodexConversionConfig, } from "../../adapter/activation/config-store.js";
 import { formatVoiceShortcut } from "../../voice/setup.js";
 import { getCodexVoiceSystemPromptChangelogPath, getCodexVoiceSystemPromptPath, REALTIME_SYSTEM_PROMPT_BASENAME, } from "../../voice/system-prompt.js";
 import { handleAboutTabInput, renderAboutTab } from "./about-tab.js";
-import { buildConfigSettings } from "./config-items.js";
 import { openCodexConfigInExternalEditor } from "./config-editor.js";
+import { buildConfigSettings } from "./config-items.js";
 import { SETTINGS_TABS } from "./tabs.js";
 import { createUsageTab } from "./usage-tab.js";
 export async function openCodexSettingsScreen(ctx, options) {
     let draft = options.initialConfig;
     let activeTab = options.initialTab ?? "adapter";
+    const availableContextModels = ctx.modelRegistry
+        .getAvailable()
+        .filter((model) => model.input.includes("text"))
+        .map((model) => ({ provider: model.provider, modelId: model.id }));
     await ctx.ui.custom((tui, theme, _kb, done) => {
         const usageTab = createUsageTab(ctx, options, () => tui.requestRender());
         let settingsList;
@@ -33,9 +37,20 @@ export async function openCodexSettingsScreen(ctx, options) {
             let list;
             const buildSettings = () => [
                 ...(activeTab === "voice" && options.lanVoiceServer
-                    ? [{ item: { id: "lanVoiceServer", label: "LAN voice server", currentValue: options.lanVoiceServer.status().running ? "on" : "off", values: ["off", "on"] } }]
+                    ? [
+                        {
+                            item: {
+                                id: "lanVoiceServer",
+                                label: "LAN voice server",
+                                currentValue: options.lanVoiceServer.status().running
+                                    ? "on"
+                                    : "off",
+                                values: ["off", "on"],
+                            },
+                        },
+                    ]
                     : []),
-                ...buildConfigSettings(activeTab, draft, theme),
+                ...buildConfigSettings(activeTab, draft, theme, availableContextModels),
             ];
             list = new SettingsList(buildSettings().map(({ item }) => item), 8, getSettingsListTheme(), (id, value) => {
                 const definition = buildSettings().find(({ item }) => item.id === id);
@@ -44,10 +59,19 @@ export async function openCodexSettingsScreen(ctx, options) {
                     return;
                 }
                 if (id === "lanVoiceServer" && options.lanVoiceServer) {
-                    const previousValue = options.lanVoiceServer.status().running ? "on" : "off";
-                    void options.lanVoiceServer.setEnabled(value === "on")
-                        .then((status) => { list.updateValue(id, status.running ? "on" : "off"); tui.requestRender(); })
-                        .catch(() => { list.updateValue(id, previousValue); tui.requestRender(); });
+                    const previousValue = options.lanVoiceServer.status().running
+                        ? "on"
+                        : "off";
+                    void options.lanVoiceServer
+                        .setEnabled(value === "on")
+                        .then((status) => {
+                        list.updateValue(id, status.running ? "on" : "off");
+                        tui.requestRender();
+                    })
+                        .catch(() => {
+                        list.updateValue(id, previousValue);
+                        tui.requestRender();
+                    });
                     return;
                 }
                 if (!definition?.update)
@@ -56,7 +80,8 @@ export async function openCodexSettingsScreen(ctx, options) {
                 const nextDraft = definition.update(value, draft);
                 if (options.onChange(nextDraft)) {
                     draft = nextDraft;
-                    const nextValue = buildSettings().find(({ item }) => item.id === id)?.item.currentValue;
+                    const nextValue = buildSettings().find(({ item }) => item.id === id)
+                        ?.item.currentValue;
                     if (nextValue !== undefined)
                         list.updateValue(id, nextValue);
                 }
@@ -89,9 +114,13 @@ export async function openCodexSettingsScreen(ctx, options) {
                     rule(width, theme, "borderMuted"),
                     ...(activeTab === "usage" ? usageTab.render(theme) : []),
                     ...(activeTab === "about" ? renderAboutTab(theme) : []),
-                    ...(activeTab === "voice" ? formatVoiceStatus(theme, options.lanVoiceServer?.status()) : []),
+                    ...(activeTab === "voice"
+                        ? formatVoiceStatus(theme, options.lanVoiceServer?.status())
+                        : []),
                     "",
-                    ...(hasSettingsList ? withSettingsFooter(settingsLines, theme) : [theme.fg("dim", formatFooter(activeTab))]),
+                    ...(hasSettingsList
+                        ? withSettingsFooter(settingsLines, theme)
+                        : [theme.fg("dim", formatFooter(activeTab))]),
                     rule(width, theme, "accent"),
                 ].map((line) => truncateToWidth(line, width, ""));
             },
@@ -99,7 +128,8 @@ export async function openCodexSettingsScreen(ctx, options) {
             handleInput: (data) => {
                 if (data === "\t") {
                     const currentIndex = SETTINGS_TABS.findIndex(({ id }) => id === activeTab);
-                    activateTab(SETTINGS_TABS[(currentIndex + 1) % SETTINGS_TABS.length]?.id ?? "adapter");
+                    activateTab(SETTINGS_TABS[(currentIndex + 1) % SETTINGS_TABS.length]?.id ??
+                        "adapter");
                     return;
                 }
                 if (activeTab === "about" && handleAboutTabInput(data, ctx))
@@ -116,13 +146,19 @@ function rule(width, theme, color) {
     return theme.fg(color, "─".repeat(Math.max(0, width)));
 }
 function formatTabs(activeTab, theme) {
-    return `  ${SETTINGS_TABS.map(({ id, label }) => id === activeTab ? theme.bold(label) : theme.fg("dim", label)).join(`  ${theme.fg("dim", "/")}  `)}`;
+    return `  ${SETTINGS_TABS.map(({ id, label }) => (id === activeTab ? theme.bold(label) : theme.fg("dim", label))).join(`  ${theme.fg("dim", "/")}  `)}`;
 }
 function formatVoiceStatus(theme, lanVoice) {
     return [
         ...(lanVoice?.running
-            ? [theme.fg("accent", "  LAN voice is running"), ...lanVoice.urls.map((url) => theme.fg("dim", `  ${url}`)), theme.fg("dim", "  First visit: accept the local HTTPS certificate")]
-            : [theme.fg("dim", "  LAN voice serves this session only and stops when the session changes")]),
+            ? [
+                theme.fg("accent", "  LAN voice is running"),
+                ...lanVoice.urls.map((url) => theme.fg("dim", `  ${url}`)),
+                theme.fg("dim", "  First visit: accept the local HTTPS certificate"),
+            ]
+            : [
+                theme.fg("dim", "  LAN voice serves this session only and stops when the session changes"),
+            ]),
     ];
 }
 function formatVoiceDetails(theme, config) {

@@ -1,3 +1,4 @@
+import { formatRunningExecSessionGuidance } from "../tools/code-mode/tool-result.js";
 import { registerCodeModeTools, registerCustomTools, } from "../tools/code-mode/tools.js";
 import { createApplyPatchTool } from "../tools/apply-patch/tool.js";
 import { createExecCommandTool } from "../tools/exec/command-tool.js";
@@ -46,7 +47,7 @@ function createNestedTools(runtime, ctx) {
             customRustBinariesDir: runtime.state.config.tools.customRustBinariesDir,
             promptSnippet: false,
             showDiffWhenCollapsed: !runtime.state.config.ui.compactTools,
-        }), "await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path immediately follows the Update File header; Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range", {}, {
+        }), "await tools.apply_patch(patch) // *** Begin Patch / *** End Patch; actions: *** Add File: path | *** Update File: path | *** Delete File: path; *** Move to: path immediately follows the Update File header; Update hunks MUST follow file order; copy exact context; @@ text is context, not a line range; reread a file before patching if it changed since your last read", {}, {
             kind: "freeform",
             prepareInput(input) {
                 if (typeof input !== "string")
@@ -90,7 +91,7 @@ function createNestedTools(runtime, ctx) {
                 if (isRunningExecResult(details))
                     return {
                         ...details,
-                        continuation: `Still running. Call exec with tools.write_stdin({ session_id: ${details.session_id} })`,
+                        continuation: formatRunningExecSessionGuidance(details.session_id),
                     };
                 if (isExecResult(details))
                     return details;

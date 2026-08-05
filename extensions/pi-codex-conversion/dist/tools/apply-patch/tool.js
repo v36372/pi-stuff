@@ -121,11 +121,7 @@ export function createApplyPatchTool(options = {}) {
                             details: {
                                 status: "partial_failure",
                                 result: error.result,
-                                error: recoveryMessage,
                                 failedTargets,
-                                appliedFiles,
-                                failedFiles,
-                                recoveryInstructions: { mustReadFiles: [...failedFiles], mustNotReadFiles: [...appliedFiles] },
                             },
                         };
                     }

@@ -3,6 +3,7 @@ import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderExecCommandCall, renderGroupedExecCommandCall } from "../../ui/tool-rendering/codex-rendering.js";
 import { formatUnifiedExecResult } from "./format.js";
+import { renderTerminalOutput } from "./output.js";
 import { MAX_EXEC_YIELD_TIME_MS } from "./shell.js";
 const EXEC_COMMAND_PARAMETERS = Type.Object({
     cmd: Type.String({ description: "Raw command string interpreted by the current shell; do not quote the entire command" }),
@@ -58,7 +59,7 @@ function expandHint() {
     }
 }
 function collapsedOutput(result, theme) {
-    let output = result.output.trimEnd();
+    let output = renderTerminalOutput(result.output).trimEnd();
     let truncated = false;
     if (output.length > COLLAPSED_OUTPUT_MAX_RAW_CHARS) {
         output = output.slice(-COLLAPSED_OUTPUT_MAX_RAW_CHARS);
@@ -122,7 +123,7 @@ function renderResult(result, renderOptions, theme, context, tracker, options) {
         const collapsed = details ?? (plainText ? { output: plainText } : undefined);
         return options.showOutputWhenCollapsed && collapsed ? renderCollapsedOutput(collapsed, theme) : new Container();
     }
-    let text = theme.fg("dim", (details?.output ?? plainText) || "(no output)");
+    let text = theme.fg("dim", renderTerminalOutput(details?.output ?? plainText) || "(no output)");
     if (details?.session_id !== undefined)
         text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
     if (details?.exit_code !== undefined)

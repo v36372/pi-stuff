@@ -70,7 +70,13 @@ interface CommandOutputOptions {
 export function renderCommandOutput(text: string, width: number, options: CommandOutputOptions = {}): string[] {
 	const max = Math.max(1, width);
 	const bodyWidth = Math.max(1, max - COMMAND_OUTPUT_PREFIX.length);
-	const line = (content: string) => `${DIM}${COMMAND_OUTPUT_PREFIX}${content}${RESET}`;
+	// Guard the complete row, including generated omission markers and the gutter.
+	// Every TUI render line must stay within the requested width or Pi exits.
+	const line = (content: string) => truncateToWidth(
+		`${DIM}${COMMAND_OUTPUT_PREFIX}${content}${RESET}`,
+		max,
+		"…",
+	);
 	const normalized = text.replace(/\t/g, "   ").replace(/\s+$/, "");
 	let rows = normalized.trim()
 		? normalized.split("\n").flatMap((row) => wrapTextWithAnsi(row, bodyWidth))

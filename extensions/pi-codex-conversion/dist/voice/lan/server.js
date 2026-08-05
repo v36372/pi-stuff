@@ -8,6 +8,7 @@ import { resolveLanVoiceCertificate } from "./certificate.js";
 import { LanVoiceDictation } from "./dictation.js";
 import { LanVoiceDraft, LanVoiceDraftConflictError } from "./draft.js";
 import { boundedString, handleLanVoiceHttpRequest } from "./http-handler.js";
+import { collectFailures, configureServer, lanVoiceUrls, listen } from "./server-runtime.js";
 import { createLanVoiceWebUi } from "./web-ui.js";
 const PORT = 43_120;
 const HEARTBEAT_MS = 15_000;
@@ -90,9 +91,16 @@ export async function startCodexLanVoiceServer(options) {
                 draft.insertTranscript(clientId, transcript, insertion);
         },
         cancelDictation: (clientId) => dictation.cancel(clientId),
-        onConversationActivity(active) {
-            if (activeConversation)
-                options.voice.setConversationInputActive(activeConversation.conversation, active);
+        async onConversationActivity(active) {
+            const current = activeConversation;
+            if (!current)
+                return;
+            if (active) {
+                options.voice.setConversationInputActive(current.conversation, true);
+                return;
+            }
+            activeConversation = undefined;
+            await options.voice.stopConversation(current.conversation, { announce: true });
         },
         conversationMuted: () => options.voice.inputMuted,
         onConversationMute(muted) {
@@ -182,31 +190,4 @@ export async function startCodexLanVoiceServer(options) {
             return closePromise;
         },
     };
-}
-async function collectFailures(promises, failures) {
-    const settled = await Promise.allSettled(promises.filter((promise) => promise !== undefined));
-    for (const result of settled)
-        if (result.status === "rejected")
-            failures.push(result.reason);
-}
-function configureServer(server) {
-    server.keepAliveTimeout = 20_000;
-    server.on("tlsClientError", () => { });
-    server.on("clientError", (_error, socket) => socket.destroy());
-    server.on("error", () => { });
-}
-function listen(server, port) {
-    return new Promise((resolve, reject) => {
-        const onError = (error) => { server.off("listening", onListening); reject(error); };
-        const onListening = () => { server.off("error", onError); resolve(); };
-        server.once("error", onError);
-        server.once("listening", onListening);
-        server.listen(port, "0.0.0.0");
-    });
-}
-function lanVoiceUrls(hostnames, ipAddresses, port) {
-    const hosts = [...hostnames.filter((value) => value !== "localhost"), ...ipAddresses.filter((value) => value !== "127.0.0.1")];
-    if (hosts.length === 0)
-        hosts.push("localhost");
-    return [...new Set(hosts.map((host) => `https://${host}:${port}`))];
 }

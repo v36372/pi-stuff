@@ -1,16 +1,12 @@
-import { renderRealtimeDelegation, renderRealtimeTranscriptTail } from "./prompts.js";
-import { CODEX_VOICE_MODE_MESSAGE_TYPE, REALTIME_VOICE_MESSAGE_TYPE, } from "./ui.js";
+import { renderRealtimeTranscriptTail } from "./prompts.js";
+import { CODEX_VOICE_MODE_MESSAGE_TYPE, codexVoiceModeMessage, REALTIME_USER_TRANSCRIPT_MESSAGE_TYPE, REALTIME_VOICE_MESSAGE_TYPE, realtimeVoiceMessage, VOICE_CONTEXT_MESSAGE_TYPE, } from "./ui.js";
 const REALTIME_VOICE_TAIL_CONTEXT_TYPE = "codex-realtime-voice-tail";
 export class CodexVoiceSessionMessages {
     pi;
     callbacks;
     context;
     piTurnActive = false;
-    backendTurnPending = false;
     dictationAnnounced = false;
-    pendingDelegations = [];
-    acceptedDelegations = [];
-    boundDelegations = [];
     constructor(pi, callbacks) {
         this.pi = pi;
         this.callbacks = callbacks;
@@ -18,6 +14,12 @@ export class CodexVoiceSessionMessages {
     setContext(ctx) {
         this.context = ctx;
         this.piTurnActive = !ctx.isIdle();
+    }
+    contextSummary(summary) {
+        this.pi.appendEntry(VOICE_CONTEXT_MESSAGE_TYPE, { summary });
+    }
+    userTranscript(transcript) {
+        this.pi.appendEntry(REALTIME_USER_TRANSCRIPT_MESSAGE_TYPE, { transcript });
     }
     modeStarted(mode) {
         if (mode === "dictation") {
@@ -33,21 +35,14 @@ export class CodexVoiceSessionMessages {
     resetSessionContext() {
         this.context = undefined;
         this.piTurnActive = false;
-        this.backendTurnPending = false;
-        this.pendingDelegations = [];
-        this.acceptedDelegations = [];
-        this.boundDelegations = [];
     }
     conversationInputStopped() {
         this.appendMode("realtime", "ended");
     }
     voiceStopped(mode) {
-        this.backendTurnPending = false;
         this.piTurnActive = this.context ? !this.context.isIdle() : false;
         if (mode && mode !== "dictation")
             this.appendMode(mode, "ended");
-        this.pendingDelegations = [];
-        this.acceptedDelegations = [];
         this.context = undefined;
     }
     voiceTurn(turn) {
@@ -64,123 +59,54 @@ export class CodexVoiceSessionMessages {
         this.deliverDelegation(turn, !this.piTurnActive && ctx.isIdle());
     }
     retainTranscriptTail(transcriptDelta) {
+        const piTurnActive = this.piTurnActive || (this.context ? !this.context.isIdle() : false);
         this.pi.sendMessage({
             customType: REALTIME_VOICE_TAIL_CONTEXT_TYPE,
             content: renderRealtimeTranscriptTail(transcriptDelta),
             display: false,
             details: {},
-        }, { triggerTurn: false, deliverAs: "nextTurn" });
-    }
-    acceptDelegatedInput(event) {
-        if (event.source !== "extension")
-            return;
-        const pendingIndex = this.pendingDelegations.findIndex((delegation) => delegation.input === event.text);
-        if (pendingIndex === -1)
-            return;
-        const [delegation] = this.pendingDelegations.splice(pendingIndex, 1);
-        if (!delegation)
-            return;
-        this.acceptedDelegations.push({ ...delegation, acceptedAt: Date.now() });
-    }
-    bindDelegatedUserMessage(message) {
-        if (message.role !== "user")
-            return;
-        const input = userMessageText(message.content);
-        if (!input)
-            return;
-        const acceptedIndex = this.acceptedDelegations.findIndex((delegation) => delegation.input === input
-            && message.timestamp >= delegation.acceptedAt);
-        if (acceptedIndex === -1)
-            return;
-        const [delegation] = this.acceptedDelegations.splice(acceptedIndex, 1);
-        if (!delegation)
-            return;
-        this.boundDelegations.push({ ...delegation, timestamp: message.timestamp });
-    }
-    applyDelegationContext(messages) {
-        const contextMessages = messages.filter((message) => !isLegacyVoiceDisplayMessage(message));
-        this.boundDelegations = this.boundDelegations.filter((delegation) => contextMessages.some((message) => message.role === "user"
-            && message.timestamp === delegation.timestamp
-            && userMessageText(message.content) === delegation.input));
-        if (this.boundDelegations.length === 0)
-            return contextMessages;
-        return contextMessages.map((message) => {
-            if (message.role !== "user")
-                return message;
-            const input = userMessageText(message.content);
-            const delegation = this.boundDelegations.find((candidate) => candidate.timestamp === message.timestamp &&
-                candidate.input === input);
-            if (!delegation)
-                return message;
-            const nonTextContent = Array.isArray(message.content)
-                ? message.content.filter((part) => part.type !== "text")
-                : [];
-            return {
-                ...message,
-                content: [
-                    {
-                        type: "text",
-                        text: renderRealtimeDelegation(delegation.input, delegation.transcriptDelta),
-                    },
-                    ...nonTextContent,
-                ],
-            };
+        }, {
+            triggerTurn: false,
+            deliverAs: piTurnActive ? "nextTurn" : "steer",
         });
     }
-    consumeDelegatedTurnStart() {
-        if (!this.backendTurnPending)
-            return false;
-        this.backendTurnPending = false;
-        return true;
+    filterContext(messages) {
+        return messages.filter((message) => !isContextExcludedVoiceMessage(message));
     }
     agentStarted() {
         this.piTurnActive = true;
     }
     agentSettled() {
         this.piTurnActive = false;
-        this.pendingDelegations = [];
-        this.acceptedDelegations = [];
     }
     appendMode(mode, state) {
+        if (mode === "realtime") {
+            this.pi.sendMessage(codexVoiceModeMessage(mode, state), {
+                triggerTurn: false,
+                deliverAs: "steer",
+            });
+            return;
+        }
         this.pi.appendEntry(CODEX_VOICE_MODE_MESSAGE_TYPE, { mode, state });
     }
     deliverDelegation(turn, startsTurn) {
         if (!turn.delegationId || !this.callbacks.canDelegate())
             return false;
         this.callbacks.onDelegation(turn.delegationId);
-        this.pendingDelegations.push({
-            input: turn.input,
-            ...(turn.transcriptDelta
-                ? { transcriptDelta: turn.transcriptDelta }
-                : {}),
-        });
-        if (startsTurn)
-            this.backendTurnPending = true;
         this.piTurnActive = true;
         this.callbacks.onWorking();
-        // Keep Pi's user-input pipeline; provider context adds the voice transcript
-        // without exposing transport markup in the visible user message.
-        this.pi.sendUserMessage(turn.input, startsTurn ? undefined : { deliverAs: "steer" });
+        this.pi.sendMessage(realtimeVoiceMessage(turn.input, "delegation", turn.transcriptDelta), startsTurn
+            ? { triggerTurn: true }
+            : { triggerTurn: true, deliverAs: "steer" });
         return true;
     }
 }
-function userMessageText(content) {
-    if (!Array.isArray(content))
-        return undefined;
-    const text = content
-        .flatMap((part) => part &&
-        typeof part === "object" &&
-        "type" in part &&
-        part.type === "text" &&
-        "text" in part &&
-        typeof part.text === "string"
-        ? [part.text]
-        : [])
-        .join("\n")
-        .trim();
-    return text || undefined;
-}
-function isLegacyVoiceDisplayMessage(message) {
-    return message.role === "custom"
-        && (message.customType === REALTIME_VOICE_MESSAGE_TYPE || message.customType === CODEX_VOICE_MODE_MESSAGE_TYPE);
+function isContextExcludedVoiceMessage(message) {
+    if (message.role !== "custom")
+        return false;
+    if (message.customType === REALTIME_VOICE_MESSAGE_TYPE)
+        return true;
+    return (message.customType === CODEX_VOICE_MODE_MESSAGE_TYPE &&
+        (typeof message.content !== "string" ||
+            !message.content.startsWith('<realtime_voice_session state="')));
 }

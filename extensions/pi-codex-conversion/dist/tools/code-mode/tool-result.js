@@ -6,7 +6,7 @@ export function toCodeModeToolResult(response, maxTokens) {
     const status = scriptError
         ? `Script error: ${scriptError}`
         : response.kind === "yielded"
-            ? `Still running. Call wait({ cell_id: "${response.cellId}" })`
+            ? `Still running (exec cell "${response.cellId}"). Use wait once near expected completion; avoid short polling`
             : response.kind === "terminated"
                 ? "Script terminated"
                 : "Script completed";
@@ -76,7 +76,10 @@ function runningExecSessionGuidance(traces) {
         else
             sessionIds.add(resultSessionId);
     }
-    return [...sessionIds].map((sessionId) => `exec_command session ${sessionId} is still running. Continue with exec and tools.write_stdin({ session_id: ${sessionId} }); wait is only for a yielded exec cell_id`);
+    return [...sessionIds].map(formatRunningExecSessionGuidance);
+}
+export function formatRunningExecSessionGuidance(sessionId) {
+    return `Session ${sessionId} still running. Resume near completion with tools.write_stdin and an appropriate yield_time_ms; do not use wait`;
 }
 function numericSessionId(value) {
     if (value &&
