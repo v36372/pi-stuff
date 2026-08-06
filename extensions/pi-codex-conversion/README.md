@@ -162,7 +162,6 @@ This is also a major change for users of the old canonical package. Legacy PATH 
 - **GipPity cannot open the microphone:** use one of Pi's HTTPS URLs and accept its local certificate. Browsers block microphone access on plain LAN HTTP.
 - **Code Mode cannot start:** its pinned host is prepared lazily and honours normal proxy environment variables. Pi reports setup failures instead of hanging the first execution.
 - **A helper cannot run on this system:** build it from a checkout on the target machine, put it in `tools.customRustBinariesDir`, then run `/reload`. Do not replace system glibc for this.
-- **A vendored copy reports `binary is not bundled for <platform>-<arch>`:** the copy omitted the release's native assets. Prefer installing the official npm package. If the vendored copy must be retained, extract the matching release binaries into one directory, set its absolute path in `tools.customRustBinariesDir`, and run `/reload`. Keep the binaries and extension on the same release version.
 - **A configured provider fails:** it must implement the OpenAI Responses contracts required by the enabled feature. Code Mode additionally needs Responses Lite compatibility; native compaction needs the Codex compaction contract.
 
 For anything stranger, clone the repository and ask your Clanka:

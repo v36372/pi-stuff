@@ -1,3 +1,4 @@
+import {} from "@earendil-works/pi-ai";
 import { resolveNativeCompactionRequestBudget, shrinkNativeCompactionRequestForEndpoint } from "./request-shrink.js";
 import { canonicalCompactionOutput, normalizeRemoteCompactionV2PromptInput } from "./remote-v2-history.js";
 import { withRemoteCompactionV2Feature } from "../../providers/openai-responses/compaction-v2-feature.js";
