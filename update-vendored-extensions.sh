@@ -118,6 +118,30 @@ rsync "${rsync_args[@]}" "$temp_dir/lovely/LICENSE" "$repo_root/extensions/inspe
 printf '\n%s@%s\n\n[pi-codex-conversion]\n' "$CODEX_PACKAGE" "$codex_version"
 rsync "${rsync_args[@]}" "$temp_dir/codex/" "$repo_root/extensions/pi-codex-conversion/"
 
+# Re-apply local patches that live outside the rsync target so they
+# survive upstream refreshes (e.g. strip grep/find/ls with the adapter).
+# Dry-run checks the freshly packed upstream tree, not the live (already
+# patched) checkout.
+local_patches_dir="$repo_root/local-patches/pi-codex-conversion"
+if [[ -d "$local_patches_dir" ]]; then
+	shopt -s nullglob
+	local_patches=("$local_patches_dir"/*.patch)
+	shopt -u nullglob
+	if ((${#local_patches[@]} > 0)); then
+		printf '\n[pi-codex-conversion local patches]\n'
+		patch_target="$repo_root/extensions/pi-codex-conversion"
+		[[ "$dry_run" == true ]] && patch_target="$temp_dir/codex"
+		for patch_file in "${local_patches[@]}"; do
+			printf '  %s %s\n' "$([[ "$dry_run" == true ]] && echo dry-run || echo apply)" "$(basename "$patch_file")"
+			if [[ "$dry_run" == true ]]; then
+				patch --dry-run -d "$patch_target" -p1 < "$patch_file"
+			else
+				patch -d "$patch_target" -p1 < "$patch_file"
+			fi
+		done
+	fi
+fi
+
 if [[ "$dry_run" == false ]]; then
 	npm install --prefix "$repo_root/extensions/pi-codex-conversion" \
 		--omit=dev --omit=peer --ignore-scripts --package-lock=false --no-audit --no-fund
