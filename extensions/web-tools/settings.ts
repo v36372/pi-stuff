@@ -72,6 +72,7 @@ export function getWebToolsSettings(): WebToolsSettings {
 			enabled: DEFAULTS.searchEnabled,
 			provider: searchProvider,
 			endpoint: DEFAULTS.searchEndpoint,
+			apiKey: process.env.EXA_API_KEY,
 			timeoutSeconds: DEFAULTS.searchTimeoutSeconds,
 			defaultMaxResults: DEFAULTS.searchDefaultMaxResults,
 			defaultDepth: searchDefaultDepth,

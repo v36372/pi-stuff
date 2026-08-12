@@ -41,7 +41,7 @@ test("normalizes spinner config with native as the safe default", () => {
 	expect(normalizeWorkingTimerConfig({ spinner: "wat" })).toEqual({ spinner: "native" });
 });
 
-test("uses Pi's native accent spinner by default and restores it on shutdown", () => {
+test("leaves an existing custom indicator alone when using the native spinner", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any, {
 		loadConfig: () => ({ spinner: "native" }),
@@ -57,10 +57,8 @@ test("uses Pi's native accent spinner by default and restores it on shutdown", (
 	};
 
 	handlers.get("session_start")?.({}, ctx);
-	expect(indicators[0]).toBeUndefined();
-
 	handlers.get("session_shutdown")?.({}, ctx);
-	expect(indicators).toEqual([undefined, undefined]);
+	expect(indicators).toEqual([]);
 });
 
 test("can use the optional eased rail spinner", () => {
@@ -90,11 +88,15 @@ test("can use the optional eased rail spinner", () => {
 		],
 		intervalMs: 260,
 	});
+
+	handlers.get("session_shutdown")?.({}, ctx);
+	expect(indicators[1]).toBeUndefined();
 });
 
-test("updates phase text and restores Pi's working message when settled", () => {
+test("keeps a whimsical phrase stable across the run and restores the message when settled", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const intervalTicks: Array<() => void> = [];
+	let picks = 0;
 	globalThis.setInterval = ((callback: () => void, ms?: number) => {
 		expect(ms).toBe(1_000);
 		intervalTicks.push(callback);
@@ -102,7 +104,12 @@ test("updates phase text and restores Pi's working message when settled", () => 
 	}) as any;
 	globalThis.clearInterval = (() => {}) as any;
 
-	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
+	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any, {
+		pickMessage: () => {
+			picks += 1;
+			return picks === 1 ? "Noodling..." : "Should not appear";
+		},
+	});
 	const messages: Array<string | undefined> = [];
 	const ctx = {
 		mode: "tui",
@@ -113,36 +120,33 @@ test("updates phase text and restores Pi's working message when settled", () => 
 	};
 
 	handlers.get("agent_start")?.({}, ctx);
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Waiting for model (0s");
+	expect(stripTestStyles(messages.at(-1))).toStartWith("Noodling... (0s");
 	for (let i = 0; i < 6; i++) intervalTicks[0]?.();
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Waiting for model (0s");
+	expect(stripTestStyles(messages.at(-1))).toStartWith("Noodling... (0s");
 
-	handlers.get("after_provider_response")?.({ status: 200 }, ctx);
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Thinking (0s");
-	handlers.get("tool_execution_start")?.({}, ctx);
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Running tools (0s");
-	handlers.get("tool_execution_end")?.({}, ctx);
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Thinking (0s");
-	handlers.get("session_before_compact")?.({}, ctx);
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Compacting (0s");
-	handlers.get("session_compact")?.({ willRetry: true }, ctx);
-	expect(stripTestStyles(messages.at(-1))).toStartWith("Retrying (0s");
-	expect(stripTestStyles(messages.filter(Boolean).join("\n"))).not.toContain("...");
+	// Retries / continuations keep the same phrase and timer anchor.
+	handlers.get("agent_start")?.({}, ctx);
+	expect(picks).toBe(1);
+	expect(stripTestStyles(messages.at(-1))).toStartWith("Noodling... (0s");
 
 	handlers.get("agent_settled")?.({}, ctx);
 	expect(messages.at(-1)).toBeUndefined();
+
+	handlers.get("agent_start")?.({}, ctx);
+	expect(picks).toBe(2);
+	expect(stripTestStyles(messages.at(-1))).toStartWith("Should not appear (0s");
 });
 
 test("formats working messages with stable visible text and interrupt hints", () => {
-	expect(formatWorkingMessage("thinking", 65_000, "escape", 1)).toBe("Thinking (1m 05s • escape to interrupt)");
-	expect(formatWorkingMessage("tools", 3_723_000, undefined, 1)).toBe("Running tools (1h 02m 03s)");
+	expect(formatWorkingMessage("Noodling...", 65_000, "escape")).toBe("Noodling... (1m 05s • escape to interrupt)");
+	expect(formatWorkingMessage("Pontificating...", 3_723_000, undefined)).toBe("Pontificating... (1h 02m 03s)");
 });
 
-test("keeps phase text stable and dims the elapsed suffix", () => {
-	const first = formatWorkingMessage("thinking", 65_000, "escape", testTheme);
-	const next = formatWorkingMessage("thinking", 65_000, "escape", 8, testTheme);
+test("keeps phrase text stable and dims the elapsed suffix", () => {
+	const first = formatWorkingMessage("Noodling...", 65_000, "escape", testTheme);
+	const next = formatWorkingMessage("Noodling...", 65_000, "escape", 8, testTheme);
 
-	expect(stripTestStyles(first)).toBe("Thinking (1m 05s • escape to interrupt)");
+	expect(stripTestStyles(first)).toBe("Noodling... (1m 05s • escape to interrupt)");
 	expect(first).toContain("<dim>(1m 05s • escape to interrupt)</dim>");
 	expect(next).toBe(first);
 });

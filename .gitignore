@@ -12,5 +12,7 @@
 !extensions/**
 !prompts
 !prompts/**
+!skills
+!skills/**
 !intercepted-commands
 !intercepted-commands/**

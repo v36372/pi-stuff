@@ -1,14 +1,9 @@
-import { summarizeShellCommand, type ShellAction } from "../../shell/summary.ts";
+import type { ShellAction } from "../../shell/summary.ts";
 import type { ExecCommandStatus } from "../../tools/exec/command-state.ts";
 
 export interface RenderTheme {
 	fg(role: string, text: string): string;
 	bold(text: string): string;
-}
-
-export function renderExecCommandCall(command: string, state: ExecCommandStatus, theme: RenderTheme): string {
-	const summary = summarizeShellCommand(command);
-	return summary.maskAsExplored ? renderExplorationText([summary.actions], state, theme) : renderCommandText(command, state, theme);
 }
 
 export function renderGroupedExecCommandCall(actionGroups: ShellAction[][], state: ExecCommandStatus, theme: RenderTheme): string {
@@ -20,11 +15,14 @@ export function renderWriteStdinCall(
 	input: string | undefined,
 	command: string | undefined,
 	theme: RenderTheme,
+	reasoning?: string,
 ): string {
 	const interacted = typeof input === "string" && input.length > 0;
 	const marker = interacted ? "↳ " : "• ";
-	const title = interacted ? "Interacted with background terminal" : "Waited for background terminal";
-	let text = `${theme.fg("dim", marker)}${theme.bold(title)}`;
+	const title = interacted ? "Interacted" : "Waited";
+	const bulletColor = interacted ? "accent" : "success";
+	let text = `${theme.fg(bulletColor, marker)}${title}`;
+	if (reasoning) text += ` ${theme.fg("accent", reasoning)}`;
 	const commandPreview = formatCommandPreview(command);
 	if (commandPreview) {
 		text += `${theme.fg("dim", " · ")}${theme.fg("muted", commandPreview)}`;
@@ -48,33 +46,29 @@ function renderExplorationText(actionGroups: ShellAction[][], state: ExecCommand
 	return text;
 }
 
-function renderCommandText(command: string, state: ExecCommandStatus, theme: RenderTheme): string {
+export function renderCommandHeadline(
+	state: ExecCommandStatus,
+	theme: RenderTheme,
+	reasoning?: string,
+	failed = false,
+	wallTimeSeconds?: number,
+): string {
 	const verb = state === "running" ? "Running" : "Ran";
-	let text = `${theme.fg("dim", "•")} ${theme.bold(verb)}`;
-	for (const [index, line] of formatCommandLines(command).entries()) {
-		const prefix = index === 0 ? "  └ " : "    ";
-		text += `\n${theme.fg("dim", prefix)}${theme.fg("accent", line)}`;
+	const color = state === "running" ? "accent" : failed ? "error" : "success";
+	let text = `${theme.fg(color, "•")} ${verb}`;
+	if (reasoning) text += ` ${theme.fg("accent", reasoning)}`;
+	else if (state === "running") text += ` ${theme.fg("dim", "…")}`;
+	if (state === "done") {
+		if (typeof wallTimeSeconds === "number") text += ` ${theme.fg("dim", `in ${formatDuration(wallTimeSeconds)}`)}`;
+		text += ` ${theme.fg(color, failed ? "✗" : "✓")}`;
 	}
 	return text;
 }
 
-function formatCommandLines(command: string, maxLines = 5): string[] {
-	const lines = command
-		.replace(/\t/g, "   ")
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.filter((line, index, all) => line.length > 0 || (index > 0 && index < all.length - 1));
-	const visible = lines.slice(0, maxLines).map((line) => shortenLine(line));
-	if (lines.length > maxLines) {
-		visible.push("...");
-	}
-	return visible.length > 0 ? visible : [""];
-}
-
-function shortenLine(line: string, max = 100): string {
-	const trimmed = line.trim();
-	if (trimmed.length <= max) return trimmed;
-	return `${trimmed.slice(0, max - 3)}...`;
+function formatDuration(seconds: number): string {
+	if (seconds < 1) return `${Math.max(1, Math.round(seconds * 1000))}ms`;
+	if (seconds < 60) return `${Math.floor(seconds)}s`;
+	return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60).toString().padStart(2, "0")}s`;
 }
 
 function shortenCommand(command: string, max = 100): string {

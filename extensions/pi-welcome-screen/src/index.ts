@@ -1,12 +1,10 @@
 import {
   getAgentDir,
-  loadSkills,
   VERSION,
   type ExtensionAPI,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   type Component,
@@ -26,33 +24,26 @@ const MIN_LIST_COLUMN_WIDTH = 22;
 const LIST_COLUMN_GAP = 2;
 const RESOURCE_POLL_INTERVAL_MS = 50;
 const MAX_RESOURCE_RETRIES = 3;
+const LAYOUT_NOTICE =
+  "pi-welcome-screen: unrecognized Pi layout — using native panel";
 const RESOURCE_PANEL_INDEX = 1;
 const RESOURCE_BRIDGE_KEY = "__piKaushWelcomeScreenResourceBridge";
-const MCP_STATUS_BRIDGE_KEY = "__piMcpWelcomeBridge";
-const MCP_STATUS_POLL_INTERVAL_MS = 100;
-const MAX_MCP_STATUS_POLLS = 30;
 
 let cachedLocalExtensionNames: Set<string> | undefined;
 
 const PI_BANNER = ["█████████", "███   ███", "██████   ███", "███      ███"];
 
-type WelcomeSection = "Context" | "Skills" | "Prompts" | "Extensions" | "MCP";
+type WelcomeSection = "Context" | "Skills" | "Prompts" | "Extensions";
 const WELCOME_SECTIONS: readonly WelcomeSection[] = [
   "Context",
   "Skills",
   "Prompts",
   "Extensions",
-  "MCP",
 ];
 
 export interface WelcomeResources {
   context: string[];
   skills: string[];
-  /**
-   * Skill names the model may auto-invoke. Skills not listed here are
-   * user-invoked only (`disable-model-invocation: true`).
-   */
-  modelInvocableSkills?: string[];
   prompts: string[];
   extensions: string[];
   /** Extensions loaded from npm or git packages. */
@@ -61,13 +52,6 @@ export interface WelcomeResources {
   sourceExtensions?: string[];
   /** @deprecated Use packageExtensions. */
   vendoredExtensions?: string[];
-  /** Configured MCP server names. */
-  mcpServers?: string[];
-  /**
-   * MCP servers currently connected. Servers not listed here render with a dim
-   * bullet (same visual language as non-model-invocable skills).
-   */
-  connectedMcpServers?: string[];
 }
 
 interface CollapsedTextComponent extends Component {
@@ -79,7 +63,13 @@ interface ResourcePanel extends Component {
   children: Component[];
 }
 
+interface ResourcePanelHost {
+  children: Component[];
+  removeChild(component: Component): void;
+}
+
 interface ResourceBridge {
+  host: ResourcePanelHost;
   panel: ResourcePanel;
   originalIndex: number;
 }
@@ -103,6 +93,15 @@ function isResourcePanel(
 ): component is ResourcePanel {
   if (!component || typeof component !== "object") return false;
   return Array.isArray((component as Partial<Container>).children);
+}
+
+function isResourcePanelHost(
+  component: Component | undefined,
+): component is ResourcePanel & ResourcePanelHost {
+  return (
+    isResourcePanel(component) &&
+    typeof (component as Partial<Container>).removeChild === "function"
+  );
 }
 
 function getSectionHeading(text: string): string | undefined {
@@ -215,6 +214,79 @@ function normalizePackageSource(label: string): string {
   return label.replace(/^(?:npm|git):/, "");
 }
 
+interface GitPackageSource {
+  label: string;
+  revision: string | undefined;
+}
+
+function splitGitRevision(pathWithRevision: string): {
+  path: string;
+  revision: string | undefined;
+} {
+  const separator = pathWithRevision.indexOf("@");
+  if (separator === -1) return { path: pathWithRevision, revision: undefined };
+  return {
+    path: pathWithRevision.slice(0, separator),
+    revision: pathWithRevision.slice(separator + 1),
+  };
+}
+
+function parseGitPackageSource(source: string): GitPackageSource {
+  const value = source.replace(/^git:/, "");
+  const scpMatch = value.match(/^git@([^:]+):(.+)$/);
+  if (scpMatch) {
+    const { path, revision } = splitGitRevision(scpMatch[2] ?? "");
+    return {
+      label: `${scpMatch[1] ?? ""}/${path}`.replace(/\.git$/, ""),
+      revision,
+    };
+  }
+
+  if (value.includes("://")) {
+    try {
+      const url = new URL(value);
+      const { path, revision } = splitGitRevision(
+        url.pathname.replace(/^\/+/, ""),
+      );
+      return {
+        label: `${url.hostname}/${path}`.replace(/\.git$/, ""),
+        revision,
+      };
+    } catch {
+      return { label: value, revision: undefined };
+    }
+  }
+
+  const slash = value.indexOf("/");
+  if (slash === -1) return { label: value, revision: undefined };
+  const { path, revision } = splitGitRevision(value.slice(slash + 1));
+  return {
+    label: `${value.slice(0, slash)}/${path}`.replace(/\.git$/, ""),
+    revision,
+  };
+}
+
+function formatPackageExtensionLabel(
+  source: string,
+  extensionPaths: string[],
+): string {
+  const extensionNames = unique(
+    extensionPaths
+      .map((path) => path.replace(/\\/g, "/").split("/").pop() ?? "")
+      .filter((name) => /\.[cm]?[jt]s$/.test(name)),
+  );
+  if (!source.startsWith("git:")) {
+    return [normalizePackageSource(source), ...extensionNames].join(" ");
+  }
+
+  const { label, revision } = parseGitPackageSource(source);
+  return [
+    label,
+    ...extensionNames,
+    ...(revision ? [`@${revision.slice(0, 6)}`] : []),
+  ].join(" ");
+}
+
 function isExplicitSourcePath(label: string): boolean {
   const normalized = label.replace(/\\/g, "/");
   return (
@@ -237,16 +309,34 @@ function parseExpandedExtensionGroups(
   const packageExtensions: string[] = [];
   const sourceExtensions: string[] = [];
   let foundItem = false;
+  let currentPackageSource: string | undefined;
+  let currentPackagePaths: string[] = [];
+  const flushPackage = () => {
+    if (!currentPackageSource) return;
+    packageExtensions.push(
+      formatPackageExtensionLabel(currentPackageSource, currentPackagePaths),
+    );
+    currentPackageSource = undefined;
+    currentPackagePaths = [];
+  };
 
   for (const rawLine of text.split("\n").slice(1)) {
     const line = stripAnsi(rawLine).replace(/\s+$/, "");
     const packageSource = line.match(/^ {4}((?:npm|git):.+)$/)?.[1];
     if (packageSource) {
-      packageExtensions.push(normalizePackageSource(packageSource));
+      flushPackage();
+      currentPackageSource = packageSource;
       foundItem = true;
       continue;
     }
 
+    const packagePath = line.match(/^ {6}(\S.*)$/)?.[1];
+    if (packagePath && currentPackageSource) {
+      currentPackagePaths.push(packagePath);
+      continue;
+    }
+
+    flushPackage();
     const path = line.match(/^ {4}(\S.*)$/)?.[1];
     if (!path || /^(?:project|user|path)$/.test(path)) continue;
 
@@ -263,6 +353,8 @@ function parseExpandedExtensionGroups(
     }
     foundItem = true;
   }
+
+  flushPackage();
 
   if (!foundItem) return undefined;
   return {
@@ -374,23 +466,53 @@ export function parseWelcomeResources(
 }
 
 function takeResourcePanel(tui: TUI): ResourceBridge | undefined {
-  const host = tui as BridgeTui;
-  if (host[RESOURCE_BRIDGE_KEY]) return undefined;
+  const keyed = tui as BridgeTui;
+  if (keyed[RESOURCE_BRIDGE_KEY]) return undefined;
 
   // TODO: Replace this bridge when Pi exposes structured startup resources
   // through its custom-header API.
-  // Pi 0.80 places the loaded-resources container immediately after the
-  // header. Guard the full shape so an upstream layout change falls back to
-  // Pi's untouched resource panel instead of moving an unrelated component.
-  if (tui.children.length < 8 || !isResourcePanel(tui.children[0]))
-    return undefined;
-  const panel = tui.children[RESOURCE_PANEL_INDEX];
-  if (!isResourcePanel(panel)) return undefined;
+  // Guard each full layout shape so an upstream change falls back to Pi's
+  // untouched resource panel instead of moving an unrelated component.
+  //
+  // Pi 0.84 nests the loaded-resources container inside a document container
+  // at tui.children[0]: [header, loaded-resources, chat].
+  const documentContainer = tui.children[0];
+  if (isResourcePanelHost(documentContainer)) {
+    const [header, panel, chat] = documentContainer.children;
+    if (
+      isResourcePanel(header) &&
+      isResourcePanel(panel) &&
+      isResourcePanel(chat)
+    ) {
+      const bridge: ResourceBridge = {
+        host: documentContainer,
+        panel,
+        originalIndex: RESOURCE_PANEL_INDEX,
+      };
+      documentContainer.removeChild(panel);
+      keyed[RESOURCE_BRIDGE_KEY] = bridge;
+      return bridge;
+    }
+  }
 
-  const bridge = { panel, originalIndex: RESOURCE_PANEL_INDEX };
-  tui.removeChild(panel);
-  host[RESOURCE_BRIDGE_KEY] = bridge;
-  return bridge;
+  // Pi 0.80–0.83 place the loaded-resources container directly at
+  // tui.children[1], immediately after the header container.
+  if (
+    tui.children.length >= 8 &&
+    isResourcePanel(tui.children[0]) &&
+    isResourcePanel(tui.children[RESOURCE_PANEL_INDEX])
+  ) {
+    const bridge: ResourceBridge = {
+      host: tui,
+      panel: tui.children[RESOURCE_PANEL_INDEX],
+      originalIndex: RESOURCE_PANEL_INDEX,
+    };
+    tui.removeChild(bridge.panel);
+    keyed[RESOURCE_BRIDGE_KEY] = bridge;
+    return bridge;
+  }
+
+  return undefined;
 }
 
 function restoreResourcePanel(
@@ -399,9 +521,9 @@ function restoreResourcePanel(
 ): void {
   if (!bridge) return;
 
-  if (!tui.children.includes(bridge.panel)) {
-    const index = Math.min(bridge.originalIndex, tui.children.length);
-    tui.children.splice(index, 0, bridge.panel);
+  if (!bridge.host.children.includes(bridge.panel)) {
+    const index = Math.min(bridge.originalIndex, bridge.host.children.length);
+    bridge.host.children.splice(index, 0, bridge.panel);
   }
   delete (tui as BridgeTui)[RESOURCE_BRIDGE_KEY];
 }
@@ -428,156 +550,16 @@ function wrapPrefixed(prefix: string, text: string, width: number): string[] {
   );
 }
 
-type BulletColor = (item: string) => string;
-
-function defaultBulletColor(_item: string): string {
-  return "dim";
-}
-
-function skillBulletColor(
-  modelInvocableSkills: ReadonlySet<string>,
-): BulletColor {
-  return (item) =>
-    modelInvocableSkills.has(item) ? "mdListBullet" : "dim";
-}
-
-function mcpBulletColor(connectedServers: ReadonlySet<string>): BulletColor {
-  return (item) => (connectedServers.has(item) ? "mdListBullet" : "dim");
-}
-
-interface McpWelcomeBridge {
-  getServers?: () => string[];
-  getConnected?: () => string[];
-  getStatuses?: () => Map<string, boolean> | Record<string, boolean>;
-}
-
-function getMcpWelcomeBridge(): McpWelcomeBridge | undefined {
-  const bridge = (globalThis as Record<string, unknown>)[MCP_STATUS_BRIDGE_KEY];
-  if (!bridge || typeof bridge !== "object") return undefined;
-  return bridge as McpWelcomeBridge;
-}
-
-function readMcpServerNamesFromConfig(path: string): string[] {
-  try {
-    if (!existsSync(path)) return [];
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<
-      string,
-      unknown
-    >;
-    const servers = raw.mcpServers ?? raw["mcp-servers"];
-    if (!servers || typeof servers !== "object" || Array.isArray(servers))
-      return [];
-    return Object.keys(servers as Record<string, unknown>);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Resolve configured MCP server names from the same shared config locations
- * pi-mcp-adapter reads, plus any live bridge published by the adapter.
- */
-export function resolveConfiguredMcpServers(cwd: string): string[] {
-  const names = new Set<string>();
-  const paths = [
-    join(homedir(), ".config", "mcp", "mcp.json"),
-    join(getAgentDir(), "mcp.json"),
-    join(cwd, ".mcp.json"),
-    join(cwd, ".pi", "mcp.json"),
-  ];
-  for (const path of paths) {
-    for (const name of readMcpServerNamesFromConfig(path)) names.add(name);
-  }
-
-  const bridge = getMcpWelcomeBridge();
-  if (typeof bridge?.getServers === "function") {
-    for (const name of bridge.getServers()) {
-      if (name) names.add(name);
-    }
-  }
-
-  return [...names].sort((left, right) => left.localeCompare(right));
-}
-
-/** Resolve currently connected MCP server names from the adapter bridge. */
-export function resolveConnectedMcpServers(): string[] {
-  const bridge = getMcpWelcomeBridge();
-  if (!bridge) return [];
-
-  if (typeof bridge.getConnected === "function") {
-    return unique(bridge.getConnected().filter(Boolean)).sort((left, right) =>
-      left.localeCompare(right),
-    );
-  }
-
-  if (typeof bridge.getStatuses === "function") {
-    const statuses = bridge.getStatuses();
-    const connected =
-      statuses instanceof Map
-        ? [...statuses.entries()]
-            .filter(([, isConnected]) => isConnected)
-            .map(([name]) => name)
-        : Object.entries(statuses)
-            .filter(([, isConnected]) => isConnected)
-            .map(([name]) => name);
-    return unique(connected.filter(Boolean)).sort((left, right) =>
-      left.localeCompare(right),
-    );
-  }
-
-  return [];
-}
-
-function sameStringList(left: string[] | undefined, right: string[]): boolean {
-  if (!left || left.length !== right.length) return false;
-  return left.every((value, index) => value === right[index]);
-}
-
-/**
- * Resolve which listed skill names are model-invocable by reading skill
- * frontmatter from Pi's default skill roots plus shared `~/.agents/skills`.
- */
-export function resolveModelInvocableSkills(
-  skillNames: string[],
-  cwd: string,
-): string[] {
-  if (skillNames.length === 0) return [];
-
-  try {
-    const skillPaths = [
-      join(homedir(), ".agents", "skills"),
-      join(cwd, ".agents", "skills"),
-    ];
-    const { skills } = loadSkills({
-      cwd,
-      agentDir: getAgentDir(),
-      skillPaths,
-      includeDefaults: true,
-    });
-    const byName = new Map(skills.map((skill) => [skill.name, skill]));
-    const modelInvocable: string[] = [];
-    for (const name of skillNames) {
-      const skill = byName.get(name);
-      // Unresolved skills default to model-invocable (Pi's frontmatter default).
-      if (!skill || !skill.disableModelInvocation) modelInvocable.push(name);
-    }
-    return modelInvocable;
-  } catch {
-    return [...skillNames];
-  }
-}
-
 function appendSingleColumnRows(
   lines: string[],
   items: string[],
   theme: Theme,
   columnWidth: number,
-  getBulletColor: BulletColor = defaultBulletColor,
 ): void {
   for (const item of items) {
     lines.push(
       ...wrapPrefixed(
-        theme.fg(getBulletColor(item), "  • "),
+        theme.fg("dim", "  • "),
         theme.fg("dim", item),
         columnWidth,
       ),
@@ -639,7 +621,6 @@ function appendColumnRows(
   theme: Theme,
   columnWidth: number,
   sharedColumnCount?: 2 | 3,
-  getBulletColor: BulletColor = defaultBulletColor,
 ): void {
   const listWidth = Math.max(1, columnWidth - 2);
   const desiredColumns = Math.ceil(items.length / MAX_LIST_ROWS_PER_COLUMN);
@@ -656,33 +637,26 @@ function appendColumnRows(
   const columnCount = Math.min(requestedColumns, fittingColumns);
 
   if (columnCount === 1) {
-    appendSingleColumnRows(lines, items, theme, columnWidth, getBulletColor);
+    appendSingleColumnRows(lines, items, theme, columnWidth);
     return;
   }
 
   const rowsPerColumn = Math.ceil(items.length / columnCount);
   const cellWidths = getColumnWidths(listWidth, columnCount);
-  const bullet = "• ";
-  const bulletWidth = visibleWidth(bullet);
 
   for (let row = 0; row < rowsPerColumn; row += 1) {
     const cells = cellWidths.map((cellWidth, column) => {
       const item = items[column * rowsPerColumn + row];
       if (!item) return " ".repeat(cellWidth);
 
-      // truncateToWidth inserts ANSI resets around its ellipsis. Color the
-      // bullet and label separately so multi-column rows can mix invocable
-      // and user-only skills without one cell resetting the next.
-      const maxItemWidth = Math.max(0, cellWidth - bulletWidth);
-      const truncatedItem = stripAnsi(
-        truncateToWidth(item, maxItemWidth, "…"),
-      );
-      const cell =
-        theme.fg(getBulletColor(item), bullet) + theme.fg("dim", truncatedItem);
+      // truncateToWidth inserts ANSI resets around its ellipsis. Strip those
+      // because the complete row receives its muted color afterward; otherwise
+      // one truncated cell resets the color of every following column.
+      const cell = stripAnsi(truncateToWidth(`• ${item}`, cellWidth, "…"));
       return cell + " ".repeat(Math.max(0, cellWidth - visibleWidth(cell)));
     });
     const rowText = `  ${cells.join(" ".repeat(LIST_COLUMN_GAP))}`.trimEnd();
-    lines.push(rowText);
+    lines.push(theme.fg("dim", rowText));
   }
 }
 
@@ -694,7 +668,6 @@ function appendSection(
   columnWidth: number,
   singleColumn = false,
   sharedColumnCount?: 2 | 3,
-  getBulletColor: BulletColor = defaultBulletColor,
 ): void {
   if (lines.length > 0) lines.push("");
   lines.push(theme.fg("mdHeading", `[${title}]`));
@@ -704,17 +677,8 @@ function appendSection(
     return;
   }
 
-  if (singleColumn)
-    appendSingleColumnRows(lines, body, theme, columnWidth, getBulletColor);
-  else
-    appendColumnRows(
-      lines,
-      body,
-      theme,
-      columnWidth,
-      sharedColumnCount,
-      getBulletColor,
-    );
+  if (singleColumn) appendSingleColumnRows(lines, body, theme, columnWidth);
+  else appendColumnRows(lines, body, theme, columnWidth, sharedColumnCount);
 }
 
 function appendExtensionsSection(
@@ -792,7 +756,10 @@ function renderBrandColumn(theme: Theme, columnWidth: number): string[] {
     );
   }
   lines.push("");
-  const versionSummary = theme.fg("dim", `v${VERSION}`);
+  const versionSummary = theme.fg(
+    "dim",
+    theme.name ? `v${VERSION} [${theme.name}]` : `v${VERSION}`,
+  );
   lines.push(
     centerBlockLine(versionSummary, visibleWidth(versionSummary), columnWidth),
   );
@@ -820,32 +787,12 @@ function appendResourceSection(
     return;
   }
 
-  if (title === "MCP") {
-    const servers = resources.mcpServers ?? [];
-    if (servers.length === 0) return;
-    appendSection(
-      lines,
-      title,
-      servers,
-      theme,
-      columnWidth,
-      false,
-      undefined,
-      mcpBulletColor(new Set(resources.connectedMcpServers ?? [])),
-    );
-    return;
-  }
-
   const body =
     title === "Context"
       ? resources.context
       : title === "Skills"
         ? resources.skills
         : resources.prompts;
-  const getBulletColor =
-    title === "Skills"
-      ? skillBulletColor(new Set(resources.modelInvocableSkills ?? body))
-      : defaultBulletColor;
   appendSection(
     lines,
     title,
@@ -854,7 +801,6 @@ function appendResourceSection(
     columnWidth,
     title === "Context",
     title === "Skills" ? sharedColumnCount : undefined,
-    getBulletColor,
   );
 }
 
@@ -880,8 +826,8 @@ function renderResourceColumn(
 type WelcomeGridItem = "Brand" | WelcomeSection;
 
 const GRID_COLUMNS: Record<2 | 3, readonly (readonly WelcomeGridItem[])[]> = {
-  2: [["Context", "Skills", "Prompts"], ["Extensions", "MCP"]],
-  3: [["Brand"], ["Context", "Skills", "Prompts"], ["Extensions", "MCP"]],
+  2: [["Context", "Skills", "Prompts"], ["Extensions"]],
+  3: [["Brand"], ["Context", "Skills", "Prompts"], ["Extensions"]],
 };
 
 function renderGridItem(
@@ -956,8 +902,15 @@ function renderStackedWelcome(
   resources: WelcomeResources | undefined,
   theme: Theme,
   columnWidth: number,
+  notice?: string,
 ): string[] {
   const lines = ["", ...renderBrandColumn(theme, columnWidth)];
+  if (notice) {
+    const noticeText = theme.fg("dim", notice);
+    lines.push(
+      centerBlockLine(noticeText, visibleWidth(noticeText), columnWidth),
+    );
+  }
   if (resources)
     lines.push("", ...renderResourceColumn(resources, theme, columnWidth));
   lines.push("");
@@ -979,6 +932,7 @@ export function renderCenteredWelcome(
   resources: WelcomeResources | undefined,
   theme: Theme,
   width: number,
+  notice?: string,
 ): string[] {
   if (width <= 0) return [];
   const columnCount = resources ? getGridColumnCount(width) : 1;
@@ -997,7 +951,7 @@ export function renderCenteredWelcome(
   const lines =
     columnCount !== 1 && resources
       ? renderGridWelcome(resources, theme, columnWidth, columnCount)
-      : renderStackedWelcome(resources, theme, layoutWidth);
+      : renderStackedWelcome(resources, theme, layoutWidth, notice);
 
   return lines.map((line) =>
     line ? leftPadding + truncateToWidth(line, layoutWidth, "") : "",
@@ -1006,8 +960,8 @@ export function renderCenteredWelcome(
 
 class WelcomeHeader implements Component {
   private resourceReadyTimer: ReturnType<typeof setTimeout> | undefined;
-  private mcpStatusTimer: ReturnType<typeof setTimeout> | undefined;
   private resources: WelcomeResources | undefined;
+  private notice: string | undefined;
   private cachedWidth: number | undefined;
   private cachedLines: string[] | undefined;
   private disposed = false;
@@ -1016,7 +970,6 @@ class WelcomeHeader implements Component {
     private readonly tui: TUI,
     private readonly theme: Theme,
     private readonly bridge: ResourceBridge | undefined,
-    private readonly cwd: string,
     forceInitialRender: boolean,
   ) {
     // session_start runs just before Pi populates its loaded-resource panel.
@@ -1032,7 +985,10 @@ class WelcomeHeader implements Component {
   ): void {
     if (this.disposed) return;
     if (!this.bridge) {
+      // The TUI layout matched no known shape. Say so in the header instead
+      // of degrading silently; this is how Pi layout changes get noticed.
       this.resourceReadyTimer = undefined;
+      this.notice = LAYOUT_NOTICE;
       if (attempt === 0) this.tui.requestRender(forceInitialRender);
       return;
     }
@@ -1041,10 +997,12 @@ class WelcomeHeader implements Component {
     try {
       snapshot = inspectResourcePanel(this.bridge.panel);
     } catch {
-      this.showNativePanel(forceInitialRender);
+      this.showNativePanel(forceInitialRender, LAYOUT_NOTICE);
       return;
     }
     if (snapshot.requiresNativePanel) {
+      // Expected fallback for diagnostics and unknown-but-valid sections:
+      // Pi's panel is preserved intact, so stay silent.
       this.showNativePanel(forceInitialRender);
       return;
     }
@@ -1062,19 +1020,10 @@ class WelcomeHeader implements Component {
     const resourcePanelIsComplete = Boolean(
       candidateResources?.extensions.some(isWelcomeScreenExtension),
     );
-    if (resourcePanelIsComplete && candidateResources) {
-      this.resources = {
-        ...candidateResources,
-        modelInvocableSkills: resolveModelInvocableSkills(
-          candidateResources.skills,
-          this.cwd,
-        ),
-        mcpServers: resolveConfiguredMcpServers(this.cwd),
-        connectedMcpServers: resolveConnectedMcpServers(),
-      };
+    if (resourcePanelIsComplete) {
+      this.resources = candidateResources;
       this.clearRenderCache();
       this.resourceReadyTimer = undefined;
-      this.startMcpStatusPolling();
       this.tui.requestRender(forceInitialRender);
       return;
     }
@@ -1090,49 +1039,18 @@ class WelcomeHeader implements Component {
         RESOURCE_POLL_INTERVAL_MS,
       );
     } else {
-      this.showNativePanel(false);
+      // A still-empty panel means quiet startup or slow resource loading;
+      // warn only when sections loaded but never became parseable.
+      this.showNativePanel(false, resourceText ? LAYOUT_NOTICE : undefined);
     }
   }
 
-  private showNativePanel(forceRender: boolean): void {
+  private showNativePanel(forceRender: boolean, notice?: string): void {
     this.resourceReadyTimer = undefined;
-    if (this.mcpStatusTimer) clearTimeout(this.mcpStatusTimer);
-    this.mcpStatusTimer = undefined;
+    this.notice = notice;
     restoreResourcePanel(this.tui, this.bridge);
     this.clearRenderCache();
     this.tui.requestRender(forceRender);
-  }
-
-  private startMcpStatusPolling(attempt = 0): void {
-    if (this.disposed || !this.resources) return;
-
-    const mcpServers = resolveConfiguredMcpServers(this.cwd);
-    const connectedMcpServers = resolveConnectedMcpServers();
-    const serversChanged = !sameStringList(this.resources.mcpServers, mcpServers);
-    const connectedChanged = !sameStringList(
-      this.resources.connectedMcpServers,
-      connectedMcpServers,
-    );
-
-    if (serversChanged || connectedChanged) {
-      this.resources = {
-        ...this.resources,
-        mcpServers,
-        connectedMcpServers,
-      };
-      this.clearRenderCache();
-      this.tui.requestRender(false);
-    }
-
-    if (attempt + 1 >= MAX_MCP_STATUS_POLLS) {
-      this.mcpStatusTimer = undefined;
-      return;
-    }
-
-    this.mcpStatusTimer = setTimeout(
-      () => this.startMcpStatusPolling(attempt + 1),
-      MCP_STATUS_POLL_INTERVAL_MS,
-    );
   }
 
   private clearRenderCache(): void {
@@ -1146,7 +1064,12 @@ class WelcomeHeader implements Component {
     }
 
     const resources = this.resources;
-    const lines = renderCenteredWelcome(resources, this.theme, width);
+    const lines = renderCenteredWelcome(
+      resources,
+      this.theme,
+      width,
+      this.notice,
+    );
     if (resources) {
       this.cachedWidth = width;
       this.cachedLines = lines;
@@ -1163,7 +1086,6 @@ class WelcomeHeader implements Component {
     if (this.disposed) return;
     this.disposed = true;
     if (this.resourceReadyTimer) clearTimeout(this.resourceReadyTimer);
-    if (this.mcpStatusTimer) clearTimeout(this.mcpStatusTimer);
     restoreResourcePanel(this.tui, this.bridge);
   }
 }
@@ -1172,14 +1094,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
 
-    const cwd = ctx.cwd || process.cwd();
     ctx.ui.setHeader(
       (tui, theme) =>
         new WelcomeHeader(
           tui,
           theme,
           takeResourcePanel(tui),
-          cwd,
           event.reason === "startup",
         ),
     );

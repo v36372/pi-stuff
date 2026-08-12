@@ -1,15 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, keyHint, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { renderExecCommandCall, renderGroupedExecCommandCall } from "../../ui/tool-rendering/codex-rendering.ts";
+import { renderCodeBox } from "../../../../code-blocks/index.ts";
+import { formatShellCommandForDisplay, highlightedShellLine } from "../../../../better-native-pi/shell.ts";
+import { reasoningFromArgs, withReasoning } from "../../ui/reasoning.ts";
+import { renderCommandHeadline, renderGroupedExecCommandCall } from "../../ui/tool-rendering/codex-rendering.ts";
 import type { ExecCommandTracker } from "./command-state.ts";
 import { formatUnifiedExecResult } from "./format.ts";
 import { renderTerminalOutput } from "./output.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { MAX_EXEC_YIELD_TIME_MS } from "./shell.ts";
 
-const EXEC_COMMAND_PARAMETERS = Type.Object({
+const EXEC_COMMAND_PARAMETERS = withReasoning(Type.Object({
 	cmd: Type.String({ description: "Raw command string interpreted by the current shell; do not quote the entire command" }),
 	workdir: Type.Optional(Type.String({ description: "Cwd" })),
 	shell: Type.Optional(Type.String()),
@@ -17,7 +20,7 @@ const EXEC_COMMAND_PARAMETERS = Type.Object({
 	yield_time_ms: Type.Optional(Type.Number({ description: "Wait ms" })),
 	max_output_tokens: Type.Optional(Type.Number({ description: "Truncate" })),
 	login: Type.Optional(Type.Boolean({ description: "Login shell" })),
-});
+}));
 
 interface ExecCommandParams {
 	cmd: string;
@@ -38,8 +41,10 @@ interface ExecCommandToolOptions {
 interface ExecCommandRenderContextLike {
 	toolCallId?: string | undefined;
 	expanded?: boolean | undefined;
-	args?: { cmd?: unknown } | undefined;
+	args?: { cmd?: unknown; reasoning?: unknown } | undefined;
 	invalidate?: () => void | undefined;
+	cwd?: string | undefined;
+	isError?: boolean | undefined;
 }
 
 function prepareExecCommandArguments(args: unknown): ExecCommandParams {
@@ -117,16 +122,17 @@ function renderCollapsedOutput(result: CollapsedExecOutput, theme: { fg(role: st
 					: { visualLines: [], skippedCount: 0 };
 				cached = { width, lines: preview.visualLines, skipped: preview.skippedCount, rawTruncated: output.truncated };
 			}
-			if (!cached.rawTruncated && cached.skipped <= 0) return cached.lines;
+			const lines = cached.lines.map((line) => truncateToWidth(`${theme.fg("dim", "  │ ")}${line}`, width, "…"));
+			if (!cached.rawTruncated && cached.skipped <= 0) return lines;
 			const hint = cached.rawTruncated ? "... (earlier output hidden," : `... (${cached.skipped} earlier lines,`;
-			return [truncateToWidth(`    ${theme.fg("muted", hint)} ${expandHint()}${theme.fg("muted", ")")}`, width, "..."), ...cached.lines];
+			return [truncateToWidth(`${theme.fg("dim", "  │ ")}${theme.fg("muted", hint)} ${expandHint()}${theme.fg("muted", ")")}`, width, "..."), ...lines];
 		},
 		invalidate(): void { cached = undefined; },
 	};
 }
 
 function renderCall(
-	args: { cmd?: unknown },
+	args: { cmd?: unknown; reasoning?: unknown },
 	theme: { fg(role: string, text: string): string; bold(text: string): string },
 	context: ExecCommandRenderContextLike | undefined,
 	tracker: ExecCommandTracker,
@@ -135,10 +141,60 @@ function renderCall(
 	tracker.registerRenderContext(context?.toolCallId, context?.invalidate ?? (() => {}));
 	const info = tracker.getRenderInfo(context?.toolCallId, command);
 	if (info.hidden) return new Text("", 0, 0);
-	const text = info.actionGroups
-		? renderGroupedExecCommandCall(info.actionGroups, info.status, theme)
-		: renderExecCommandCall(command, info.status, theme);
-	return new Text(text, 0, 0);
+	if (info.actionGroups) {
+		return new Text(renderGroupedExecCommandCall(info.actionGroups, info.status, theme), 0, 0);
+	}
+	return new ExecCommandCallComponent(
+		command,
+		renderCommandHeadline(info.status, theme, reasoningFromArgs(args), info.failed ?? context?.isError ?? false, info.wallTimeSeconds),
+		Boolean(context?.expanded),
+		theme,
+	);
+}
+
+class ExecCommandCallComponent {
+	private cached?: { width: number; lines: string[] };
+	private readonly command: string;
+	private readonly headline: string;
+	private readonly expanded: boolean;
+	private readonly theme: { fg(role: string, text: string): string };
+
+	constructor(
+		command: string,
+		headline: string,
+		expanded: boolean,
+		theme: { fg(role: string, text: string): string },
+	) {
+		this.command = command;
+		this.headline = headline;
+		this.expanded = expanded;
+		this.theme = theme;
+	}
+
+	render(width: number): string[] {
+		if (this.cached?.width === width) return this.cached.lines;
+		const boxWidth = Math.max(1, width - 2);
+		const formatted = formatShellCommandForDisplay(this.command.replace(/\t/g, "   ").replace(/\s+$/, ""), Math.max(1, boxWidth - 4));
+		let markdownTheme: any;
+		try {
+			markdownTheme = getMarkdownTheme();
+			markdownTheme.codeBlockBorder("");
+		} catch {
+			markdownTheme = { codeBlock: (text: string) => text, codeBlockBorder: (text: string) => this.theme.fg("borderMuted", text) };
+		}
+		const commandTheme = {
+			...markdownTheme,
+			highlightCode: (code: string) => code.split("\n").map((line) => highlightedShellLine(line, this.theme)),
+		};
+		const box = renderCodeBox(formatted.join("\n"), "bash", boxWidth, commandTheme, {
+			maxRows: this.expanded ? undefined : 8,
+			renderOmission: (omitted, innerWidth) => this.theme.fg("dim", truncateToWidth(`… +${omitted} lines (${expandHint()})`, innerWidth, "…")),
+		}).map((line) => truncateToWidth(`  ${line}`, width, "…"));
+		this.cached = { width, lines: [truncateToWidth(this.headline, width, "…"), ...box] };
+		return this.cached.lines;
+	}
+
+	invalidate(): void { this.cached = undefined; }
 }
 
 function renderResult(
@@ -152,6 +208,7 @@ function renderResult(
 	const command = typeof context?.args?.cmd === "string" ? context.args.cmd : "";
 	if (tracker.getRenderInfo(context?.toolCallId, command).hidden) return new Container();
 	const details = isUnifiedExecResult(result.details) ? result.details : undefined;
+	tracker.recordOutcome(context?.toolCallId, Boolean(context?.isError || (details?.exit_code !== undefined && details.exit_code !== 0)), details?.wall_time_seconds);
 	const textContent = result.content.find((item) => item.type === "text");
 	const plainText = textContent?.text ?? "";
 	if (!renderOptions.expanded) {
@@ -161,7 +218,7 @@ function renderResult(
 	let text = theme.fg("dim", renderTerminalOutput(details?.output ?? plainText) || "(no output)");
 	if (details?.session_id !== undefined) text += `\n${theme.fg("accent", `Session ${details.session_id} still running`)}`;
 	if (details?.exit_code !== undefined) text += `\n${theme.fg("muted", `Exit code: ${details.exit_code}`)}`;
-	return new Text(text, 4, 0);
+	return new Text(text.split("\n").map((line) => `  │ ${line}`).join("\n"), 0, 0);
 }
 
 export function createExecCommandTool(tracker: ExecCommandTracker, sessions: ExecSessionManager, options: ExecCommandToolOptions = {}) {
@@ -171,6 +228,7 @@ export function createExecCommandTool(tracker: ExecCommandTracker, sessions: Exe
 		description: "Run shell commands; may return session_id",
 		...(options.promptSnippet === false ? {} : { promptSnippet: "Run command" }),
 		parameters: EXEC_COMMAND_PARAMETERS,
+		renderShell: "self",
 		prepareArguments: prepareExecCommandArguments,
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("exec_command aborted");
@@ -187,7 +245,7 @@ export function createExecCommandTool(tracker: ExecCommandTracker, sessions: Exe
 			return toToolResult(result);
 		},
 		...(options.customRendering === false ? {} : {
-			renderCall: ((args: { cmd?: unknown }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ExecCommandRenderContextLike) => renderCall(args, theme, context, tracker)) as never,
+			renderCall: ((args: { cmd?: unknown; reasoning?: unknown }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ExecCommandRenderContextLike) => renderCall(args, theme, context, tracker)) as never,
 			renderResult: ((result: { content: Array<{ type: string; text?: string | undefined }>; details?: unknown }, renderOptions: { expanded: boolean; isPartial: boolean }, theme: { fg(role: string, text: string): string }, context?: ExecCommandRenderContextLike) => renderResult(result, renderOptions, theme, context, tracker, options)) as never,
 		}),
 	};

@@ -23,7 +23,7 @@ type ExaMessage = {
 export class ExaSearchProvider implements SearchProvider {
 	readonly name = "exa" as const;
 
-	constructor(private readonly endpoint: string) {}
+	constructor(private readonly endpoint: string, private readonly apiKey?: string) {}
 
 	async search(input: SearchRequest, signal?: AbortSignal): Promise<NormalizedSearchResult[]> {
 		const response = await fetch(this.endpoint, {
@@ -31,6 +31,7 @@ export class ExaSearchProvider implements SearchProvider {
 			headers: {
 				accept: "application/json, text/event-stream",
 				"content-type": "application/json",
+				...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
 			},
 			body: JSON.stringify({
 				jsonrpc: "2.0",

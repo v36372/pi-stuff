@@ -8,6 +8,12 @@ Lightweight local fork of [`@howaboua/pi-codex-conversion`](https://github.com/I
 
 No voice, compaction, code mode, web_run, view_image, imagegen, custom providers, or prompt rewrites.
 
+The three tools use the same reason-first transcript language as
+[`better-native-pi`](../better-native-pi/): every call requires a short
+`reasoning` intent, compact rows render without Pi's default card spacing,
+commands use the shared highlighted shell box, exploration calls coalesce, and
+patch/output previews stay bounded until `Ctrl+O` expands them.
+
 Tool implementations and native binaries are copied from that MIT-licensed package (see `LICENSE`).
 
 ## Install (local only)
@@ -84,3 +90,8 @@ Upstream **prebuilts will not help** — they are the same dynamically linked ar
 ```bash
 node --experimental-strip-types check.mjs
 ```
+
+## Extension dependencies
+
+The command renderer reuses [`better-native-pi`](../better-native-pi/) shell
+formatting and [`code-blocks`](../code-blocks/) framing from this agent repo.

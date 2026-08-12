@@ -8,10 +8,9 @@ A compact, centered startup screen for the [Pi coding agent](https://pi.dev). It
 
 - **Zero runtime dependencies** — installs as readable TypeScript without pulling additional packages into your Pi setup.
 - **Context files in load order** — shows exactly which instructions Pi loaded and the order in which they apply.
-- **Skill invocation at a glance** — model-invocable skills use the theme list-bullet color; user-only skills stay dim.
 - **Extensions grouped by source** — separates Pi-local extensions, installed packages, and linked source paths.
 - **Responsive layout** — adapts from a stacked view to a full-width brand over two resource columns, then a dedicated brand beside two resource columns.
-- **Fail-safe behavior** — if the startup data or UI shape is unfamiliar, restores Pi's untouched native resource panel instead of hiding information.
+- **Fail-safe behavior** — if the startup data or UI shape is unfamiliar, restores Pi's untouched native resource panel instead of hiding information. When the layout itself is unrecognized, the header says so instead of degrading silently.
 
 ## Install
 
@@ -35,7 +34,7 @@ Use `--no-extensions` before `-e` to test it without your other configured exten
 
 The extension installs its header through Pi's public `ctx.ui.setHeader()` API. Pi 0.80.6 does not expose structured startup-resource data, so the extension also uses a narrowly guarded bridge to inspect and temporarily relocate Pi's native startup-resource panel.
 
-Every expected component shape is checked before it is touched. If Pi changes the panel, exposes an unknown section, or produces incomplete resource data, the extension restores Pi's untouched native panel rather than hiding information. The initial release is tested against Pi 0.80.6.
+Every expected component shape is checked before it is touched. If Pi changes the panel, exposes an unknown section, or produces incomplete resource data, the extension restores Pi's untouched native panel rather than hiding information. Tested against Pi 0.80.6 through 0.84.0, including the nested document-container layout introduced in Pi 0.84.
 
 Like any custom-header extension, it shares Pi's single header slot. If another extension also calls `setHeader()`, the last installed header wins; neither extension needs to replace the editor or intercept terminal input.
 

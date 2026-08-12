@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const loadSkillsMock = vi.fn(() => ({ skills: [], diagnostics: [] }));
-
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   VERSION: "0.80.6",
   getAgentDir: () => "/tmp/pi-agent",
-  loadSkills: (...args: unknown[]) => loadSkillsMock(...args),
 }));
 vi.mock("@earendil-works/pi-tui", () => ({
   truncateToWidth(text: string, width: number, suffix = "") {
@@ -33,9 +30,6 @@ const {
   normalizeExtensionName,
   parseWelcomeResources,
   renderCenteredWelcome,
-  resolveConnectedMcpServers,
-  resolveConfiguredMcpServers,
-  resolveModelInvocableSkills,
 } = await import("../src/index.ts");
 
 const plainTheme = {
@@ -73,8 +67,6 @@ const originalOffline = process.env.PI_OFFLINE;
 
 beforeEach(() => {
   process.env.PI_OFFLINE = "1";
-  loadSkillsMock.mockReset();
-  loadSkillsMock.mockReturnValue({ skills: [], diagnostics: [] });
 });
 
 afterEach(() => {
@@ -138,6 +130,44 @@ describe("welcome resource formatting", () => {
     expect(
       normalizeExtensionName("pi-web-access:extensions/web-search.ts"),
     ).toBe("pi-web-access");
+  });
+
+  test("shows package extension filenames and abbreviates pinned git revisions", () => {
+    const resources = parseWelcomeResources(
+      `[Extensions]\n  unified-edit`,
+      new Set(),
+      [
+        "[Extensions]",
+        "  user",
+        "    git:github.com/mitsuhiko/agent-stuff@c77d49797ad3fb78888e5b002ae606a93777c6b1",
+        "      extensions/unified-edit.ts",
+      ].join("\n"),
+    );
+
+    expect(resources.packageExtensions).toEqual([
+      "github.com/mitsuhiko/agent-stuff unified-edit.ts @c77d49",
+    ]);
+    expect(resources.extensions.join("\n")).not.toContain(
+      "c77d49797ad3fb78888e5b002ae606a93777c6b1",
+    );
+  });
+
+  test("keeps all package extension filenames in expanded order", () => {
+    const resources = parseWelcomeResources(
+      `[Extensions]\n  zeta, alpha`,
+      new Set(),
+      [
+        "[Extensions]",
+        "  user",
+        "    git:github.com/example/extensions",
+        "      extensions/zeta.ts",
+        "      extensions/alpha.ts",
+      ].join("\n"),
+    );
+
+    expect(resources.packageExtensions).toEqual([
+      "github.com/example/extensions zeta.ts alpha.ts",
+    ]);
   });
 
   test("uses expanded provenance to separate local, package, and source extensions", () => {
@@ -271,6 +301,37 @@ describe("welcome resource formatting", () => {
 
     const narrow = renderCenteredWelcome(resources, plainTheme as never, 24);
     expect(narrow.every((line) => line.length <= 24)).toBe(true);
+  });
+
+  test("shows the active theme name alongside the version", () => {
+    const resources = {
+      context: ["AGENTS.md"],
+      skills: ["artifactor"],
+      prompts: ["/implement"],
+      extensions: ["welcome-screen"],
+    };
+    const namedTheme = { ...plainTheme, name: "cobalt2" };
+
+    const named = renderCenteredWelcome(resources, namedTheme as never, 80);
+    const versionIndex = named.findIndex((line) => line.includes("v0.80.6"));
+    expect(named[versionIndex]?.trim()).toBe("v0.80.6 [cobalt2]");
+
+    const unnamed = renderCenteredWelcome(resources, plainTheme as never, 80);
+    expect(unnamed.some((line) => line.trim() === "v0.80.6")).toBe(true);
+  });
+
+  test("renders the layout notice beneath the version", () => {
+    const lines = renderCenteredWelcome(
+      undefined,
+      plainTheme as never,
+      80,
+      "pi-welcome-screen: unrecognized Pi layout — using native panel",
+    );
+    const versionIndex = lines.findIndex((line) => line.includes("v0.80.6"));
+    expect(lines[versionIndex + 1]?.trim()).toBe(
+      "pi-welcome-screen: unrecognized Pi layout — using native panel",
+    );
+    expect(lines.every((line) => line.length <= 80)).toBe(true);
   });
 
   test("uses one, two, or three equal-width grid columns as space allows", () => {
@@ -457,7 +518,6 @@ describe("welcome resource formatting", () => {
       {
         context: ["AGENTS.md"],
         skills: ["artifactor"],
-        modelInvocableSkills: [],
         prompts: ["/implement"],
         extensions: ["welcome-screen"],
       },
@@ -487,140 +547,6 @@ describe("welcome resource formatting", () => {
         .filter(({ color }) => color === "accent")
         .every(({ text }) => text.includes("█")),
     ).toBe(true);
-  });
-
-  test("colors model-invocable skill bullets with the theme list-bullet color", () => {
-    const colorCalls: Array<{ color: string; text: string }> = [];
-    const recordingTheme = {
-      bold: (text: string) => text,
-      fg(color: string, text: string) {
-        colorCalls.push({ color, text });
-        return text;
-      },
-    };
-
-    renderCenteredWelcome(
-      {
-        context: [],
-        skills: ["commit", "grill-me"],
-        modelInvocableSkills: ["commit"],
-        prompts: [],
-        extensions: [],
-      },
-      recordingTheme as never,
-      80,
-    );
-
-    const skillBullets = colorCalls.filter(
-      ({ text }) => text === "  • " || text === "• ",
-    );
-    expect(
-      skillBullets.some(({ color }) => color === "mdListBullet"),
-    ).toBe(true);
-    expect(skillBullets.some(({ color }) => color === "dim")).toBe(true);
-    expect(colorCalls.find(({ text }) => text === "commit")?.color).toBe(
-      "dim",
-    );
-    expect(colorCalls.find(({ text }) => text === "grill-me")?.color).toBe(
-      "dim",
-    );
-  });
-
-  test("renders MCP servers with highlighted dots for connected ones", () => {
-    const colorCalls: Array<{ color: string; text: string }> = [];
-    const recordingTheme = {
-      bold: (text: string) => text,
-      fg(color: string, text: string) {
-        colorCalls.push({ color, text });
-        return text;
-      },
-    };
-
-    const rendered = renderCenteredWelcome(
-      {
-        context: [],
-        skills: [],
-        prompts: [],
-        extensions: [],
-        mcpServers: ["gcloud", "wiz"],
-        connectedMcpServers: ["wiz"],
-      },
-      recordingTheme as never,
-      80,
-    ).join("\n");
-
-    expect(rendered).toContain("[MCP]");
-    expect(rendered).toContain("gcloud");
-    expect(rendered).toContain("wiz");
-
-    const bulletColors = colorCalls
-      .filter(({ text }) => text === "  • " || text === "• ")
-      .map(({ color }) => color);
-    expect(bulletColors).toContain("mdListBullet");
-    expect(bulletColors).toContain("dim");
-    expect(colorCalls.find(({ text }) => text === "[MCP]")?.color).toBe(
-      "mdHeading",
-    );
-  });
-
-  test("omits the MCP section when no servers are configured", () => {
-    const rendered = renderCenteredWelcome(
-      {
-        context: ["AGENTS.md"],
-        skills: [],
-        prompts: [],
-        extensions: [],
-        mcpServers: [],
-      },
-      plainTheme as never,
-      80,
-    ).join("\n");
-
-    expect(rendered).not.toContain("[MCP]");
-  });
-
-  test("resolveConnectedMcpServers reads the adapter welcome bridge", () => {
-    const key = "__piMcpWelcomeBridge";
-    const host = globalThis as Record<string, unknown>;
-    const previous = host[key];
-    host[key] = {
-      getServers: () => ["gcloud", "wiz"],
-      getConnected: () => ["wiz"],
-    };
-
-    try {
-      expect(resolveConnectedMcpServers()).toEqual(["wiz"]);
-      expect(resolveConfiguredMcpServers("/tmp/project")).toEqual(
-        expect.arrayContaining(["gcloud", "wiz"]),
-      );
-    } finally {
-      if (previous === undefined) delete host[key];
-      else host[key] = previous;
-    }
-  });
-
-  test("resolveModelInvocableSkills keeps only skills without disable-model-invocation", () => {
-    loadSkillsMock.mockReturnValue({
-      skills: [
-        { name: "commit", disableModelInvocation: false },
-        { name: "grill-me", disableModelInvocation: true },
-        { name: "code-review", disableModelInvocation: false },
-      ],
-      diagnostics: [],
-    });
-
-    expect(
-      resolveModelInvocableSkills(
-        ["commit", "grill-me", "missing-skill"],
-        "/tmp/project",
-      ),
-    ).toEqual(["commit", "missing-skill"]);
-    expect(loadSkillsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cwd: "/tmp/project",
-        includeDefaults: true,
-      }),
-    );
   });
 });
 
@@ -751,6 +677,214 @@ describe("welcome resource-panel bridge", () => {
     expect(tui.children[1]).toBe(panel);
   });
 
+  test("captures resources from Pi 0.84's nested document container", async () => {
+    let sessionStart: ((event: unknown, context: any) => void) | undefined;
+    welcomeScreen({
+      on(event: string, handler: (event: unknown, context: any) => void) {
+        if (event === "session_start") sessionStart = handler;
+      },
+    } as never);
+
+    let headerFactory:
+      | ((
+          tui: any,
+          theme: any,
+        ) => { render(width: number): string[]; dispose?(): void })
+      | undefined;
+    sessionStart?.(
+      {},
+      {
+        mode: "tui",
+        ui: {
+          setHeader(factory: typeof headerFactory) {
+            headerFactory = factory;
+          },
+        },
+      },
+    );
+
+    const resourceComponent = {
+      ...emptyComponent(),
+      getCollapsedText() {
+        return [
+          "[Context]",
+          "  AGENTS.md",
+          "[Skills]",
+          "  artifactor",
+          "[Prompts]",
+          "  /implement",
+          "[Extensions]",
+          "  src",
+        ].join("\n");
+      },
+      getExpandedText() {
+        return [
+          "[Extensions]",
+          "  user",
+          "    ~/dev/pi-kaush/extensions/pi-welcome-screen/src",
+        ].join("\n");
+      },
+    };
+    const themeComponent = {
+      ...emptyComponent(),
+      getCollapsedText() {
+        return "[Themes]\n  dracula";
+      },
+    };
+    const panel = {
+      children: [] as Array<typeof resourceComponent | typeof themeComponent>,
+      invalidate() {},
+      render() {
+        return [];
+      },
+    };
+    const makeContainer = () => ({
+      ...emptyComponent(),
+      children: [] as any[],
+      removeChild(component: unknown) {
+        const index = this.children.indexOf(component as never);
+        if (index !== -1) this.children.splice(index, 1);
+      },
+    });
+    const documentContainer = makeContainer();
+    documentContainer.children.push(makeContainer(), panel, makeContainer());
+    const tui = {
+      children: [
+        documentContainer,
+        ...Array.from({ length: 6 }, emptyComponent),
+      ],
+      removeChild(component: unknown) {
+        const index = this.children.indexOf(component as never);
+        if (index !== -1) this.children.splice(index, 1);
+      },
+      requestRender() {},
+    };
+
+    const header = headerFactory?.(tui, plainTheme);
+    expect(documentContainer.children).not.toContain(panel);
+    expect(documentContainer.children).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    panel.children.push(resourceComponent, themeComponent);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const rendered = header?.render(80).join("\n");
+    expect(rendered).toContain("• AGENTS.md");
+    expect(rendered).toContain(
+      "~/dev/pi-kaush/extensions/pi-welcome-screen/src",
+    );
+    expect(rendered).not.toContain("[Themes]");
+    expect(rendered).not.toContain("dracula");
+    expect(tui.children[0]).toBe(documentContainer);
+
+    header?.dispose?.();
+    expect(documentContainer.children[1]).toBe(panel);
+  });
+
+  test("warns in the header when Pi's layout shape is unrecognized", async () => {
+    let sessionStart: ((event: unknown, context: any) => void) | undefined;
+    welcomeScreen({
+      on(event: string, handler: (event: unknown, context: any) => void) {
+        if (event === "session_start") sessionStart = handler;
+      },
+    } as never);
+
+    let headerFactory:
+      | ((
+          tui: any,
+          theme: any,
+        ) => { render(width: number): string[]; dispose?(): void })
+      | undefined;
+    sessionStart?.(
+      {},
+      {
+        mode: "tui",
+        ui: {
+          setHeader(factory: typeof headerFactory) {
+            headerFactory = factory;
+          },
+        },
+      },
+    );
+
+    const tui = {
+      children: Array.from({ length: 9 }, emptyComponent),
+      removeChild() {},
+      requestRender() {},
+    };
+    const header = headerFactory?.(tui, plainTheme);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const rendered = header?.render(80).join("\n");
+    expect(rendered).toContain("█████████");
+    expect(rendered).toContain(
+      "pi-welcome-screen: unrecognized Pi layout — using native panel",
+    );
+  });
+
+  test("warns when loaded sections never become parseable", async () => {
+    let sessionStart: ((event: unknown, context: any) => void) | undefined;
+    welcomeScreen({
+      on(event: string, handler: (event: unknown, context: any) => void) {
+        if (event === "session_start") sessionStart = handler;
+      },
+    } as never);
+
+    let headerFactory:
+      | ((
+          tui: any,
+          theme: any,
+        ) => { render(width: number): string[]; dispose?(): void })
+      | undefined;
+    sessionStart?.(
+      {},
+      {
+        mode: "tui",
+        ui: {
+          setHeader(factory: typeof headerFactory) {
+            headerFactory = factory;
+          },
+        },
+      },
+    );
+
+    const resourceComponent = {
+      ...emptyComponent(),
+      getCollapsedText() {
+        return "[Context]\n  AGENTS.md\n[Extensions]\n  some-other-extension";
+      },
+    };
+    const panel = {
+      children: [] as Array<typeof resourceComponent>,
+      invalidate() {},
+      render() {
+        return [];
+      },
+    };
+    const children = [
+      { ...emptyComponent(), children: [] },
+      panel,
+      ...Array.from({ length: 7 }, emptyComponent),
+    ];
+    const tui = {
+      children,
+      removeChild(component: unknown) {
+        const index = this.children.indexOf(component as never);
+        if (index !== -1) this.children.splice(index, 1);
+      },
+      requestRender() {},
+    };
+
+    const header = headerFactory?.(tui, plainTheme);
+    expect(tui.children).not.toContain(panel);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    panel.children.push(resourceComponent);
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    const rendered = header?.render(80).join("\n");
+    expect(rendered).toContain("unrecognized Pi layout");
+    expect(tui.children[1]).toBe(panel);
+  });
+
   async function expectNativePanelFallback(options: {
     nativeComponent?: any;
     heading?: string;
@@ -830,6 +964,9 @@ describe("welcome resource-panel bridge", () => {
     const renderedHeader = header?.render(80).join("\n") ?? "";
     expect(renderedHeader).toContain("█████████");
     expect(renderedHeader).not.toContain("[Context]");
+    // Expected fallbacks (diagnostics, unknown sections, quiet startup)
+    // restore Pi's panel without crying wolf.
+    expect(renderedHeader).not.toContain("unrecognized Pi layout");
     expect(tui.children[1]).toBe(panel);
     expect(panel.children).toEqual(originalPanelChildren);
     if (options.heading) {

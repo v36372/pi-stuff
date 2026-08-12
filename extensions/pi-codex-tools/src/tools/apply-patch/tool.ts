@@ -11,17 +11,19 @@ import {
 	isApplyPatchToolDetails,
 	markApplyPatchFailure,
 	markApplyPatchPartialFailure,
+	markApplyPatchSuccess,
 	renderApplyPatchCallFromState,
 	setApplyPatchRenderState,
 	type ApplyPatchPartialFailureDetails,
 	type ApplyPatchSuccessDetails,
 } from "./render-state.ts";
+import { withReasoning } from "../../ui/reasoning.ts";
 
-const APPLY_PATCH_PARAMETERS = Type.Object({
+const APPLY_PATCH_PARAMETERS = withReasoning(Type.Object({
 	input: Type.String({
 		description: "Full patch text. Use *** Begin Patch / *** End Patch with Add/Update/Delete File sections. Order each file's hunks top-to-bottom; indentation is literal",
 	}),
-});
+}));
 
 interface ApplyPatchRenderContextLike {
 	toolCallId?: string | undefined;
@@ -52,9 +54,10 @@ function parseApplyPatchParams(params: unknown): { patchText: string } {
 
 function prepareApplyPatchArguments(args: unknown): { input: string } {
 	if (args && typeof args === "object") {
-		if ("input" in args && typeof args.input === "string") return { input: args.input };
-		if ("patchText" in args && typeof args.patchText === "string") return { input: args.patchText };
-		if ("patch" in args && typeof args.patch === "string") return { input: args.patch };
+		const reasoning = "reasoning" in args && typeof args.reasoning === "string" ? { reasoning: args.reasoning } : {};
+		if ("input" in args && typeof args.input === "string") return { ...reasoning, input: args.input };
+		if ("patchText" in args && typeof args.patchText === "string") return { ...reasoning, input: args.patchText };
+		if ("patch" in args && typeof args.patch === "string") return { ...reasoning, input: args.patch };
 	}
 	return args as { input: string };
 }
@@ -124,7 +127,7 @@ export type { ExecutePatchResult } from "../../patch/types.ts";
 export { clearApplyPatchRenderState };
 
 const renderApplyPatchCallWithOptionalContext = (
-	args: { input?: unknown | undefined },
+	args: { input?: unknown | undefined; reasoning?: unknown | undefined },
 	theme: { fg(role: string, text: string): string; bold(text: string): string },
 	context?: ApplyPatchRenderContextLike,
 	options: ApplyPatchToolOptions = {},
@@ -138,6 +141,7 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}) {
 		...(options.promptSnippet === false ? {} : { promptSnippet: "Edit files with patch" }),
 		parameters: APPLY_PATCH_PARAMETERS,
 		executionMode: "sequential",
+		renderShell: "self",
 		prepareArguments: prepareApplyPatchArguments,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("apply_patch aborted");
@@ -190,12 +194,13 @@ export function createApplyPatchTool(options: ApplyPatchToolOptions = {}) {
 				`Moved files: ${result.movedFiles.length}`,
 				`Fuzz: ${result.fuzz}`,
 			].join("\n");
+			markApplyPatchSuccess(toolCallId);
 
 			return { content: [{ type: "text", text: summary }], details: { status: "success", result } satisfies ApplyPatchSuccessDetails };
 		},
-		renderCall: ((args: { input?: unknown | undefined }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ApplyPatchRenderContextLike) => renderApplyPatchCallWithOptionalContext(args, theme, context, options)) as any,
+		renderCall: ((args: { input?: unknown | undefined; reasoning?: unknown | undefined }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: ApplyPatchRenderContextLike) => renderApplyPatchCallWithOptionalContext(args, theme, context, options)) as any,
 		renderResult(result, { isPartial }, theme) {
-			if (isPartial) return new Text(`${theme.fg("dim", "•")} ${theme.bold("Patching")}`, 0, 0);
+			if (isPartial) return new Container();
 			if (!isApplyPatchToolDetails(result.details)) return new Container();
 			if (result.details.status === "partial_failure") return new Container();
 			return new Container();

@@ -7,7 +7,7 @@ interface ApplyPatchRenderState {
 	collapsed: string;
 	collapsedDiff: string;
 	expanded: string;
-	status: "pending" | "partial_failure" | "failed";
+	status: "pending" | "success" | "partial_failure" | "failed";
 	failedTargets?: string[] | undefined;
 }
 
@@ -49,6 +49,11 @@ export function setApplyPatchRenderState(
 
 export function markApplyPatchPartialFailure(toolCallId: string, failedTargets?: string[]): void {
 	markApplyPatchFailure(toolCallId, "partial_failure", failedTargets);
+}
+
+export function markApplyPatchSuccess(toolCallId: string): void {
+	const existing = applyPatchRenderStates.get(toolCallId);
+	if (existing) applyPatchRenderStates.set(toolCallId, { ...existing, status: "success" });
 }
 
 export function markApplyPatchFailure(toolCallId: string, status: "partial_failure" | "failed", failedTargets?: string[]): void {
@@ -115,10 +120,11 @@ function renderFailedCall(text: string, theme: { fg(role: string, text: string):
 	return lines.map((line, index) => failedLineIndexes.has(index) || index === 0 ? theme.fg("error", line) : line).join("\n");
 }
 
-export function renderApplyPatchCallFromState(args: { input?: unknown | undefined }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: { toolCallId?: string | undefined; cwd?: string | undefined; expanded?: boolean | undefined; argsComplete?: boolean | undefined; showCollapsedDiff?: boolean | undefined }): string {
-	if (context?.argsComplete === false) return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
+export function renderApplyPatchCallFromState(args: { input?: unknown | undefined; reasoning?: unknown | undefined }, theme: { fg(role: string, text: string): string; bold(text: string): string }, context?: { toolCallId?: string | undefined; cwd?: string | undefined; expanded?: boolean | undefined; argsComplete?: boolean | undefined; showCollapsedDiff?: boolean | undefined }): string {
+	const reasoning = typeof args.reasoning === "string" ? args.reasoning.replace(/\s+/g, " ").trim() : "";
+	if (context?.argsComplete === false) return `${theme.fg("accent", "•")} Patching${reasoning ? ` ${theme.fg("accent", reasoning)}` : ` ${theme.fg("dim", "…")}`}`;
 	const patchText = typeof args.input === "string" ? args.input : "";
-	if (patchText.trim().length === 0) return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
+	if (patchText.trim().length === 0) return `${theme.fg("accent", "•")} Patching${reasoning ? ` ${theme.fg("accent", reasoning)}` : ""}`;
 	const cached = context?.toolCallId ? applyPatchRenderStates.get(context.toolCallId) : undefined;
 	const cwd = context?.cwd ?? cached?.cwd;
 	const effectivePatchText = cached?.patchText ?? patchText;
@@ -131,9 +137,19 @@ export function renderApplyPatchCallFromState(args: { input?: unknown | undefine
 		if (cached?.status === "failed") return theme.fg("error", "• Edit failed");
 		return `${theme.fg("dim", "•")} ${theme.bold("Patching")}`;
 	}
-	return cached?.status === "partial_failure"
-		? renderPartialFailureCall(baseText, theme, cached.failedTargets)
-		: cached?.status === "failed"
-			? renderFailedCall(baseText, theme, cached.failedTargets)
-			: baseText;
+	const reasonedText = reasoning ? addReasoning(baseText, reasoning, theme) : baseText;
+	if (cached?.status === "partial_failure") return renderPartialFailureCall(reasonedText, theme, cached.failedTargets);
+	if (cached?.status === "failed") return renderFailedCall(reasonedText, theme, cached.failedTargets);
+	const lines = reasonedText.split("\n");
+	if (lines[0]?.startsWith("• ")) lines[0] = `${theme.fg(cached?.status === "success" ? "success" : "accent", "•")}${lines[0].slice(1)}`;
+	return lines.join("\n");
+}
+
+function addReasoning(text: string, reasoning: string, theme: { fg(role: string, text: string): string }): string {
+	const lines = text.split("\n");
+	const first = lines[0] ?? "";
+	const counts = first.match(/ (\(\+\d+ -\d+\))$/)?.[1];
+	if (!counts) return text;
+	lines[0] = `${first.slice(0, -(counts.length + 1))}${theme.fg("dim", " to ")}${theme.fg("accent", reasoning)} ${theme.fg("dim", "·")} ${counts}`;
+	return lines.join("\n");
 }

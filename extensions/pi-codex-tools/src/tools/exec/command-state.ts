@@ -5,6 +5,8 @@ export type ExecCommandStatus = "running" | "done";
 export interface ExecCommandRenderInfo {
 	hidden: boolean;
 	status: ExecCommandStatus;
+	failed?: boolean | undefined;
+	wallTimeSeconds?: number | undefined;
 	actionGroups?: ShellAction[][] | undefined;
 }
 
@@ -14,6 +16,8 @@ interface ExecEntry {
 	summary: CommandSummary;
 	status: ExecCommandStatus;
 	hidden: boolean;
+	failed?: boolean | undefined;
+	wallTimeSeconds?: number | undefined;
 	groupId?: number | undefined;
 	invalidate?: () => void | undefined;
 }
@@ -31,6 +35,7 @@ export interface ExecCommandTracker {
 	recordStart(toolCallId: string, command: string): void;
 	recordPersistentSession(toolCallId: string, sessionId: number): void;
 	recordEnd(toolCallId: string): void;
+	recordOutcome(toolCallId: string | undefined, failed: boolean, wallTimeSeconds?: number): void;
 	recordSessionFinished(sessionId: number): void;
 	resetExplorationGroup(): void;
 	clear(): void;
@@ -98,6 +103,8 @@ export function createExecCommandTracker(): ExecCommandTracker {
 				return {
 					hidden: false,
 					status: entry.status,
+					failed: entry.failed,
+					wallTimeSeconds: entry.wallTimeSeconds,
 					actionGroups: entry.summary.maskAsExplored ? [entry.summary.actions] : undefined,
 				};
 			}
@@ -108,6 +115,7 @@ export function createExecCommandTracker(): ExecCommandTracker {
 			return {
 				hidden: false,
 				status: entries.some((groupEntry) => groupEntry.status === "running") ? "running" : "done",
+				failed: entries.some((groupEntry) => groupEntry.failed),
 				actionGroups: entries.map((groupEntry) => groupEntry.summary.actions),
 			};
 		},
@@ -177,6 +185,15 @@ export function createExecCommandTracker(): ExecCommandTracker {
 			const group = getGroupForEntry(entry);
 			invalidateToolCall(group?.visibleEntryId ?? toolCallId);
 			commandByToolCallId.delete(toolCallId);
+		},
+		recordOutcome(toolCallId, failed, wallTimeSeconds) {
+			if (!toolCallId) return;
+			const entry = entriesByToolCallId.get(toolCallId);
+			if (!entry) return;
+			const changed = entry.failed !== failed || entry.wallTimeSeconds !== wallTimeSeconds;
+			entry.failed = failed;
+			entry.wallTimeSeconds = wallTimeSeconds;
+			if (changed) invalidateToolCall(getGroupForEntry(entry)?.visibleEntryId ?? toolCallId);
 		},
 		recordSessionFinished(sessionId) {
 			const toolCallId = toolCallIdBySessionId.get(sessionId);

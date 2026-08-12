@@ -76,13 +76,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   function isAskUserTool(toolName: string): boolean {
-    return toolName === "ask";
+    return toolName === "ask_user" || toolName === "ask_user_question";
   }
 
   function getQuestionDetail(args: any): string {
-    const prompts = Array.isArray(args.prompts) ? args.prompts : [];
-    const title = prompts[0]?.title ?? "";
-    return prompts.length > 1 ? `${prompts.length} prompts · ${title}` : title;
+    const questions = Array.isArray(args.questions) ? args.questions : [];
+    const first = questions[0];
+    const question = first?.question ?? first?.header ?? args.question ?? args.prompt ?? "";
+    return questions.length > 1 ? `${questions.length} questions · ${question}` : question;
   }
 
   function connectToCompanion(): Promise<void> {

@@ -4,10 +4,11 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { buildToolBlock, renderCommandOutput, REASONING_DESCRIPTION, withReasoning } from "./core.js";
 
 const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
-const TEST_TAG_PATTERN = /<\/?(?:bold|green|magenta|red)>|<\/>/g;
+const OSC8_PATTERN = /\x1b\]8;;.*?(?:\x07|\x1b\\)/g;
+const TEST_TAG_PATTERN = /<link:[^>]+>|<\/link>|<\/?(?:bold|cyan|dim|green|magenta|red)>|<\/>/g;
 
 function plain(text: string): string {
-	return text.replace(ANSI_PATTERN, "").replace(TEST_TAG_PATTERN, "");
+	return text.replace(ANSI_PATTERN, "").replace(OSC8_PATTERN, "").replace(TEST_TAG_PATTERN, "");
 }
 
 describe("withReasoning", () => {
@@ -71,6 +72,31 @@ describe("buildToolBlock write expansion", () => {
 
 		expect(lines.filter((line) => plain(line).includes("export const x = 1;")).length).toBe(2);
 		expect(lines.filter((line) => plain(line).includes("export const y = 2;")).length).toBe(2);
+	});
+});
+
+describe("buildToolBlock grep summaries", () => {
+	test("shows match and file counts", () => {
+		const lines = buildToolBlock(
+			"grep",
+			{ reasoning: "find todo markers", pattern: "TODO", path: "src" },
+			{ content: [{ type: "text", text: "a.ts:1: TODO one\nb.ts:4: TODO two" }] },
+		);
+
+		expect(plain(lines.join("\n"))).toContain("TODO in src · 2 matches in 2 files");
+	});
+
+	test("marks grep counts as lower bounds when the match limit is reached", () => {
+		const lines = buildToolBlock(
+			"grep",
+			{ reasoning: "find repeated string", pattern: "needle", path: "src" },
+			{
+				content: [{ type: "text", text: "a.ts:1: needle\na.ts:2: needle" }],
+				details: { matchLimitReached: 100 },
+			},
+		);
+
+		expect(plain(lines.join("\n"))).toContain("needle in src · 100+ matches in 1 file");
 	});
 });
 

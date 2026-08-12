@@ -52,7 +52,11 @@ user-visible run and the previous one; resumed images stay unloaded until expand
 Exploration groups wait until a tool actually starts executing before rendering
 live rows. This avoids flashing streamed JSON fragments such as half-written
 paths and prevents provisional provider tool-call updates from appearing as
-brief duplicate `Exploring` blocks.
+brief duplicate `Exploring` blocks. Settled `grep` searches append a colored
+match count to the grouped search row, including `+` when the count is a lower
+bound because the result hit a limit. Like bash output, grouped grep rows show a
+dim collapsed output snippet with `Ctrl+O` (`app.tools.expand`) revealing the
+bounded full grep output under that row.
 
 ## Layout
 

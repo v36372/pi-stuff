@@ -9,6 +9,8 @@ import {
 	stripAdapterTools,
 	syncAdapter,
 } from "./src/activation.ts";
+import { REASONING_DESCRIPTION, withReasoning } from "./src/ui/reasoning.ts";
+import { renderCommandHeadline, renderWriteStdinCall } from "./src/ui/tool-rendering/codex-rendering.ts";
 
 assert.deepEqual(
 	mergeAdapterTools(["read", "bash", "edit", "write", "grep", "find", "ls", "webfetch"]),
@@ -122,4 +124,20 @@ assert.deepEqual(captureBaseline(["exec_command", "write_stdin", "apply_patch"])
 	assert.equal(state.previousToolNames, undefined);
 }
 
-console.log("ok");
+const theme = {
+	bold: (text) => text,
+	fg: (_role, text) => text,
+};
+const schema = withReasoning({
+	type: "object",
+	properties: { cmd: { type: "string" } },
+	required: ["cmd"],
+});
+assert.deepEqual(Object.keys(schema.properties), ["reasoning", "cmd"]);
+assert.deepEqual(schema.required, ["reasoning", "cmd"]);
+assert.equal(schema.properties.reasoning.description, REASONING_DESCRIPTION);
+assert.match(renderCommandHeadline("running", theme, "verify the renderer"), /Running verify the renderer/);
+assert.match(renderCommandHeadline("done", theme, "verify the renderer", false, 0.1), /Ran verify the renderer in 100ms ✓/);
+assert.match(renderWriteStdinCall(7, undefined, "bun test", theme, "collect test output"), /Waited collect test output · bun test/);
+
+console.log("reason-first renderers ok");

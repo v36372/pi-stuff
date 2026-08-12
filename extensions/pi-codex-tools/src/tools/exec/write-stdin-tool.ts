@@ -2,16 +2,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { renderWriteStdinCall } from "../../ui/tool-rendering/codex-rendering.ts";
+import { reasoningFromArgs, withReasoning } from "../../ui/reasoning.ts";
 import type { ExecSessionManager, UnifiedExecResult } from "./session-manager.ts";
 import { formatUnifiedExecResult } from "./format.ts";
 import { renderTerminalOutput } from "./output.ts";
 
-const WRITE_STDIN_PARAMETERS = Type.Object({
+const WRITE_STDIN_PARAMETERS = withReasoning(Type.Object({
 	session_id: Type.Number({ description: "Session ID" }),
 	chars: Type.Optional(Type.String({ description: "Input. Empty polls" })),
 	yield_time_ms: Type.Optional(Type.Number({ description: "Wait ms" })),
 	max_output_tokens: Type.Optional(Type.Number({ description: "Truncate" })),
-});
+}));
 
 interface WriteStdinParams {
 	session_id: number;
@@ -82,6 +83,7 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 		description: "Write/poll exec session",
 		...(options.promptSnippet === false ? {} : { promptSnippet: "Write to exec session" }),
 		parameters: WRITE_STDIN_PARAMETERS,
+		renderShell: "self",
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const typed = parseWriteStdinParams(params);
 			const command = sessions.getSessionCommand(typed.session_id) ?? "";
@@ -106,7 +108,7 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 			const sessionId = typeof inputArgs.session_id === "number" ? inputArgs.session_id : "?";
 			const input = typeof inputArgs.chars === "string" ? inputArgs.chars : undefined;
 			const command = typeof sessionId === "number" ? sessions.getSessionCommand(sessionId) : undefined;
-			return new Text(renderWriteStdinCall(sessionId, input, command, theme), 0, 0);
+			return new Text(renderWriteStdinCall(sessionId, input, command, theme, reasoningFromArgs(args)), 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
 			const state = getResultState(result);
@@ -125,7 +127,7 @@ export function createWriteStdinTool(sessions: ExecSessionManager, options: { pr
 			if (state.exitCode !== undefined) {
 				text += `\n${theme.fg("muted", `Exit code: ${state.exitCode}`)}`;
 			}
-			return new Text(text, 0, 0);
+			return new Text(text.split("\n").map((line) => `  │ ${line}`).join("\n"), 0, 0);
 		},
 	};
 	return tool;

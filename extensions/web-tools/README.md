@@ -48,6 +48,7 @@ Current defaults:
 - `enabled`: `true`
 - `provider`: `exa`
 - `endpoint`: `https://mcp.exa.ai/mcp`
+- `apiKey`: from `EXA_API_KEY` env var (no key = free tier with rate limits)
 - `timeoutSeconds`: `25`
 - `defaultMaxResults`: `8`
 - `defaultDepth`: `auto`
@@ -57,6 +58,7 @@ Behavior notes:
 - uses the Exa MCP endpoint
 - Exa currently supports provider depths `auto` and `fast`; tool input `deep` is downgraded to `fast`
 - search responses are limited to `1 MB`
+- without an API key, Exa applies free-tier rate limits (2 QPS, 50 requests/day); set `EXA_API_KEY` to remove limits
 - provider requests currently send:
   - `livecrawl: "fallback"`
   - `contextMaxCharacters: 2000`
@@ -79,6 +81,7 @@ The extension has an internal settings shape:
     enabled: boolean;
     provider: "exa";
     endpoint: string;
+    apiKey?: string;
     timeoutSeconds: number;
     defaultMaxResults: number;
     defaultDepth: "auto" | "fast" | "deep";
@@ -93,6 +96,17 @@ That means:
 - `webfetch.format` and `webfetch.timeout` can be overridden per call
 - `websearch.maxResults` and `websearch.depth` can be overridden per call
 - the underlying defaults are not currently exposed through Pi settings, extension settings, or env vars
+
+### Setting your Exa API key
+
+Get an API key at [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) and export it in your shell environment:
+
+```bash
+export EXA_API_KEY=exa-...
+pi
+```
+
+When set, the key is sent as an `Authorization: Bearer` header to the Exa MCP endpoint, bypassing the free-tier rate limits (2 QPS, 50 requests/day). Without it, anonymous requests are rate-limited but still work for light usage.
 
 To change the defaults, edit:
 

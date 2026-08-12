@@ -7,7 +7,7 @@ import type { SearchProvider } from "./providers/types.ts";
 import { appendExpandHint, appendExpandedPreview, getTextContent } from "./render.ts";
 import { getWebToolsSettings } from "./settings.ts";
 import { truncateTextOutput } from "./truncation.ts";
-import type { NormalizedSearchResult, SearchDepth, WebSearchDetails } from "./types.ts";
+import type { NormalizedSearchResult, SearchDepth, WebSearchDetails, WebToolsSettings } from "./types.ts";
 
 const SEARCH_DEPTHS = ["auto", "fast", "deep"] as const;
 
@@ -70,7 +70,7 @@ export function createWebSearchTool() {
 			});
 
 			try {
-				const provider = createProvider();
+				const provider = createProvider(settings);
 				const results = await provider.search({ query, maxResults, depth }, composed.signal);
 				const output = formatSearchResults(query, results);
 				const truncated = await truncateTextOutput(output, {
@@ -178,11 +178,10 @@ export function formatSearchResults(query: string, results: NormalizedSearchResu
 	return lines.join("\n").trimEnd();
 }
 
-function createProvider(): SearchProvider {
-	const settings = getWebToolsSettings();
+function createProvider(settings: WebToolsSettings): SearchProvider {
 	switch (settings.search.provider) {
 		case "exa":
-			return new ExaSearchProvider(settings.search.endpoint);
+			return new ExaSearchProvider(settings.search.endpoint, settings.search.apiKey);
 	}
 }
 

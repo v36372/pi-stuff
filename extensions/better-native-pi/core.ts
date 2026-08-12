@@ -197,6 +197,63 @@ function textFromResult(r: any): string {
 	return "";
 }
 
+export interface GrepMatchSummary {
+	matches: number;
+	files?: number;
+	lowerBound: boolean;
+}
+
+function grepBody(text: string): string {
+	// Built-in grep appends bracketed truncation notices after a blank line.
+	// Keep them out of the match-line count.
+	return text.replace(/\n\n\[[\s\S]*\]$/, "").trimEnd();
+}
+
+export function grepMatchSummaryFromResult(result: any): GrepMatchSummary | undefined {
+	const text = textFromResult(result).trim();
+	if (!text) return undefined;
+	if (/^No matches found/.test(text)) return { matches: 0, files: 0, lowerBound: false };
+
+	const body = grepBody(text);
+	const matchEntries = body
+		.split("\n")
+		.map((line) => line.match(/^(.+):\d+:/))
+		.filter((match): match is RegExpMatchArray => Boolean(match));
+	const matchLimit = Number.isInteger(result?.details?.matchLimitReached)
+		? result.details.matchLimitReached as number
+		: undefined;
+	const lowerBound = Boolean(matchLimit || result?.details?.truncation?.truncated);
+	const matches = Math.max(matchEntries.length, matchLimit ?? 0);
+	if (matches > 0) {
+		return {
+			matches,
+			files: matchEntries.length ? new Set(matchEntries.map((match) => match[1])).size : undefined,
+			lowerBound,
+		};
+	}
+
+	const fallback = nonEmptyLineCount(body);
+	return fallback > 0 ? { matches: fallback, lowerBound } : undefined;
+}
+
+export function formatPlainGrepMatchSummary(summary: GrepMatchSummary): string {
+	const suffix = summary.lowerBound ? "+" : "";
+	const matchLabel = summary.matches === 1 && !summary.lowerBound ? "match" : "matches";
+	const head = `${summary.matches}${suffix} ${matchLabel}`;
+	if (summary.files === undefined) return head;
+	const fileLabel = summary.files === 1 ? "file" : "files";
+	return `${head} in ${summary.files} ${fileLabel}`;
+}
+
+function formatGrepMatchSummary(summary: GrepMatchSummary): string {
+	const suffix = summary.lowerBound ? "+" : "";
+	const matchLabel = summary.matches === 1 && !summary.lowerBound ? "match" : "matches";
+	const head = `${GREEN}${summary.matches}${suffix} ${matchLabel}${RESET}`;
+	if (summary.files === undefined) return head;
+	const fileLabel = summary.files === 1 ? "file" : "files";
+	return `${head} in ${CYAN}${summary.files} ${fileLabel}${RESET}`;
+}
+
 /** Colored result summary from a finished tool result. */
 function summarize(
 	name: string,
@@ -241,14 +298,8 @@ function summarize(
 		return `(${GREEN}+${add}${RESET} ${RED}-${del}${RESET})`;
 	}
 	if (name === "grep") {
-		if (/^No matches found/.test(text.trim())) return "0 matches in 0 files";
-		// Count only true match lines (path:lineno:...), not context (path-lineno-...) or -- separators.
-		const matchLines = text.split("\n").map((line) => ({ line, match: line.match(/^(.+):\d+:/) })).filter((entry) => entry.match);
-		const count = matchLines.length || nonEmptyLineCount(text);
-		const files = new Set(matchLines.map((entry) => entry.match?.[1])).size;
-		const matchLabel = count === 1 ? "match" : "matches";
-		const fileLabel = files === 1 ? "file" : "files";
-		return `${GREEN}${count} ${matchLabel}${RESET} in ${CYAN}${files} ${fileLabel}${RESET}`;
+		const summary = grepMatchSummaryFromResult(result);
+		if (summary) return formatGrepMatchSummary(summary);
 	}
 	const count = nonEmptyLineCount(text);
 	const noun = name === "find" ? "files" : name === "ls" ? "entries" : "results";

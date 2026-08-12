@@ -1,10 +1,12 @@
 /**
- * working-timer — adds elapsed time and phase text to Pi's built-in working row.
+ * working-timer — whimsical phrase + elapsed timer on Pi's working row.
  *
- * The first agent_start anchors a user-visible run. The timer remains anchored
- * across retries, automatic compaction, and queued continuations, then resets
- * only after agent_settled. Pi's retry and compaction loaders keep their native
- * messages; the elapsed time resumes when the normal working row returns.
+ * Picks one phrase from `whimsical.ts` at the start of a user-visible run and
+ * keeps it stable while the dimmed elapsed/interrupt suffix ticks. The timer
+ * remains anchored across retries, automatic compaction, and queued
+ * continuations, then resets only after agent_settled. Pi's retry and
+ * compaction loaders keep their native messages; the elapsed time resumes when
+ * the normal working row returns.
  */
 import {
 	getAgentDir,
@@ -14,6 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pickWhimsicalMessage } from "../whimsical.ts";
 
 const UPDATE_INTERVAL_MS = 1_000;
 const RAIL_3_INTERVAL_MS = 300;
@@ -23,7 +26,6 @@ const RAIL_3_EASED_POSITIONS = [0, 0, 1, 2, 2, 1] as const;
 const NORMAL_FG = "\x1b[39m";
 
 export type SpinnerStyle = "native" | "rail-3" | "rail-3-eased";
-export type WorkingPhase = "waiting" | "thinking" | "tools" | "retrying" | "compacting";
 
 export interface WorkingTimerConfig {
 	spinner: SpinnerStyle;
@@ -31,19 +33,12 @@ export interface WorkingTimerConfig {
 
 interface RuntimeDependencies {
 	loadConfig?: () => WorkingTimerConfig;
+	pickMessage?: () => string;
 }
 
 type ThemeColor = "accent" | "dim";
 type WorkingMessageTheme = {
 	fg(color: ThemeColor, text: string): string;
-};
-
-const PHASE_LABELS: Record<WorkingPhase, string> = {
-	waiting: "Waiting for model",
-	thinking: "Thinking",
-	tools: "Running tools",
-	retrying: "Retrying",
-	compacting: "Compacting",
 };
 
 export function workingTimerConfigPath(): string {
@@ -63,10 +58,6 @@ export function loadWorkingTimerConfig(path = workingTimerConfigPath()): Working
 	} catch {
 		return { spinner: "native" };
 	}
-}
-
-function isRetryStatus(status: number): boolean {
-	return status === 429 || status >= 500;
 }
 
 function formatElapsed(elapsedMs: number): string {
@@ -105,7 +96,7 @@ function indicatorForStyle(style: SpinnerStyle, theme: WorkingMessageTheme): { f
 }
 
 export function formatWorkingMessage(
-	phase: WorkingPhase,
+	label: string,
 	elapsedMs: number,
 	interruptKey: string | undefined,
 	frameOrTheme?: number | WorkingMessageTheme,
@@ -113,7 +104,6 @@ export function formatWorkingMessage(
 ): string {
 	const interruptHint = interruptKey ? ` • ${interruptKey} to interrupt` : "";
 	const theme = typeof frameOrTheme === "number" ? maybeTheme : frameOrTheme;
-	const label = PHASE_LABELS[phase];
 	const header = theme ? `${NORMAL_FG}${label}` : label;
 	const suffix = `(${formatElapsed(elapsedMs)}${interruptHint})`;
 	return `${header} ${theme ? theme.fg("dim", suffix) : suffix}`;
@@ -122,28 +112,27 @@ export function formatWorkingMessage(
 export default function workingTimer(pi: ExtensionAPI, deps: RuntimeDependencies = {}) {
 	let startedAt: number | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
-	let phase: WorkingPhase = "waiting";
-	let activeToolExecutions = 0;
+	let label = "";
 	let renderCtx: ExtensionContext | undefined;
 	let interruptKey: string | undefined;
 
 	const loadConfig = () => deps.loadConfig?.() ?? loadWorkingTimerConfig();
+	const pickMessage = () => deps.pickMessage?.() ?? pickWhimsicalMessage();
+	let installedCustomIndicator = false;
 
 	const installIndicator = (ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
-		ctx.ui.setWorkingIndicator(indicatorForStyle(loadConfig().spinner, ctx.ui.theme));
+		const indicator = indicatorForStyle(loadConfig().spinner, ctx.ui.theme);
+		// Leave an existing custom indicator (e.g. RunCat) alone when using native.
+		if (!indicator) return;
+		installedCustomIndicator = true;
+		ctx.ui.setWorkingIndicator(indicator);
 	};
 
 	const render = (ctx = renderCtx) => {
 		if (ctx?.mode !== "tui" || startedAt === undefined) return;
 		renderCtx = ctx;
-		ctx.ui.setWorkingMessage(formatWorkingMessage(phase, Date.now() - startedAt, interruptKey, ctx.ui.theme));
-	};
-
-	const setPhase = (nextPhase: WorkingPhase, ctx: ExtensionContext) => {
-		if (ctx.mode !== "tui" || startedAt === undefined || phase === nextPhase) return;
-		phase = nextPhase;
-		render(ctx);
+		ctx.ui.setWorkingMessage(formatWorkingMessage(label, Date.now() - startedAt, interruptKey, ctx.ui.theme));
 	};
 
 	const stop = (ctx?: ExtensionContext) => {
@@ -153,7 +142,6 @@ export default function workingTimer(pi: ExtensionAPI, deps: RuntimeDependencies
 		}
 		startedAt = undefined;
 		renderCtx = undefined;
-		activeToolExecutions = 0;
 		if (ctx?.mode === "tui") ctx.ui.setWorkingMessage();
 	};
 
@@ -162,13 +150,14 @@ export default function workingTimer(pi: ExtensionAPI, deps: RuntimeDependencies
 	pi.on("agent_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 
-		activeToolExecutions = 0;
 		interruptKey = keyText("app.interrupt") || undefined;
 
 		// Preserve the first start across retries, compaction, and automatic
 		// continuations so this measures the complete user-visible run.
-		if (startedAt === undefined) startedAt = Date.now();
-		phase = "waiting";
+		if (startedAt === undefined) {
+			startedAt = Date.now();
+			label = pickMessage();
+		}
 		render(ctx);
 		if (timer) return;
 
@@ -176,28 +165,12 @@ export default function workingTimer(pi: ExtensionAPI, deps: RuntimeDependencies
 		timer.unref?.();
 	});
 
-	pi.on("before_provider_request", (_event, ctx) => setPhase("waiting", ctx));
-	pi.on("after_provider_response", (event, ctx) => setPhase(isRetryStatus(event.status) ? "retrying" : "thinking", ctx));
-	pi.on("message_start", (event, ctx) => {
-		if (event.message.role === "assistant") setPhase("thinking", ctx);
-	});
-	pi.on("message_update", (event, ctx) => {
-		if (event.message.role === "assistant") setPhase("thinking", ctx);
-	});
-	pi.on("tool_execution_start", (_event, ctx) => {
-		activeToolExecutions += 1;
-		setPhase("tools", ctx);
-	});
-	pi.on("tool_execution_end", (_event, ctx) => {
-		activeToolExecutions = Math.max(0, activeToolExecutions - 1);
-		if (activeToolExecutions === 0) setPhase("thinking", ctx);
-	});
-	pi.on("session_before_compact", (_event, ctx) => setPhase("compacting", ctx));
-	pi.on("session_compact", (event, ctx) => setPhase(event.willRetry ? "retrying" : "thinking", ctx));
-
 	pi.on("agent_settled", (_event, ctx) => stop(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {
 		stop(ctx);
-		if (ctx.mode === "tui") ctx.ui.setWorkingIndicator();
+		if (ctx.mode === "tui" && installedCustomIndicator) {
+			installedCustomIndicator = false;
+			ctx.ui.setWorkingIndicator();
+		}
 	});
 }

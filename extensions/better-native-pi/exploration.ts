@@ -1,7 +1,8 @@
 import { basename, dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { shortPath } from "./render.js";
+import { formatPlainGrepMatchSummary, grepMatchSummaryFromResult, renderCommandOutput } from "./core.js";
+import { CYAN, GREEN, RESET, shortPath } from "./render.js";
 
 export const EXPLORATION_DETAILS_KEY = "__pi_exploration";
 const REGISTRY_KEY = Symbol.for("pi.exploration.registry.v2");
@@ -11,6 +12,10 @@ const EXPLORATION_TOOLS = new Set(["read", "ls", "grep", "find"]);
 export interface Activity {
 	verb: "Read" | "List" | "Search";
 	detail: string;
+	/** Plain settled-result summary appended after completion. */
+	summary?: string;
+	/** Bounded raw result text for expanded rendering. Stripped before persistence. */
+	output?: string;
 	/** Raw path for structured read coalescing; detail stays as fallback text. */
 	path?: string;
 	/** Human range label, e.g. "lines 10-40", for chunked reads. */
@@ -20,6 +25,8 @@ export interface Activity {
 interface DisplayActivity {
 	verb: Activity["verb"];
 	detail: string;
+	summary?: string;
+	output?: string;
 }
 
 interface LegacySummary {
@@ -194,7 +201,12 @@ function coalescedActivities(activities: readonly Activity[]): DisplayActivity[]
 	for (let index = 0; index < activities.length;) {
 		const current = activities[index];
 		if (current.verb !== "Read") {
-			grouped.push({ verb: current.verb, detail: displayDetail(current) });
+			grouped.push({
+				verb: current.verb,
+				detail: displayDetail(current),
+				summary: current.summary,
+				output: current.output,
+			});
 			index += 1;
 			continue;
 		}
@@ -230,15 +242,36 @@ function styledReadDetail(detail: string, theme: any): string {
 	return `${styledLocation}${range ? dim(theme, range) : ""}`;
 }
 
+function styledSummary(item: DisplayActivity): string | undefined {
+	if (!item.summary) return undefined;
+	if (item.verb !== "Search") return item.summary;
+	const match = item.summary.match(/^(\d+\+?) (match|matches)(?: in (\d+) (file|files))?$/);
+	if (!match) return item.summary;
+	const matches = `${GREEN}${match[1]} ${match[2]}${RESET}`;
+	return match[3] && match[4] ? `${matches} in ${CYAN}${match[3]} ${match[4]}${RESET}` : matches;
+}
+
 function styledDetail(item: DisplayActivity, theme: any): string {
-	if (item.verb === "Read") return styledReadDetail(item.detail, theme);
-	if (item.verb === "Search") {
+	let detail: string;
+	if (item.verb === "Read") {
+		detail = styledReadDetail(item.detail, theme);
+	} else if (item.verb === "Search") {
 		const separator = " in ";
 		const index = item.detail.lastIndexOf(separator);
-		if (index < 0) return item.detail;
-		return `${item.detail.slice(0, index)}${dim(theme, separator)}${item.detail.slice(index + separator.length)}`;
+		detail = index < 0
+			? item.detail
+			: `${item.detail.slice(0, index)}${dim(theme, separator)}${item.detail.slice(index + separator.length)}`;
+	} else {
+		detail = item.detail;
 	}
-	return item.detail;
+	const summary = styledSummary(item);
+	return summary ? `${detail}${dim(theme, " · ")}${summary}` : detail;
+}
+
+function renderOutputSnippet(text: string | undefined, width: number, expanded: boolean): string[] {
+	const normalized = text?.replace(/\s+$/, "");
+	if (!normalized) return [];
+	return renderCommandOutput(normalized, width, { maxRows: expanded ? undefined : 3 });
 }
 
 export function renderExploration(
@@ -246,6 +279,7 @@ export function renderExploration(
 	active: boolean,
 	theme: any,
 	width: number,
+	options: { expanded?: boolean } = {},
 ): string[] {
 	const maxWidth = Math.max(1, width);
 	const styleHeading = active ? (text: string) => accent(theme, text) : (text: string) => text;
@@ -267,6 +301,9 @@ export function renderExploration(
 			const prefix = rowIndex === 0 ? firstPrefix : continuationPrefix;
 			lines.push(truncateToWidth(`${prefix}${row}`, maxWidth, "…"));
 		}
+		if (item.output) {
+			lines.push(...renderOutputSnippet(item.output, maxWidth, options.expanded ?? false));
+		}
 	});
 	return lines;
 }
@@ -279,11 +316,18 @@ export function renderSummary(summary: LegacySummary, theme: any, width: number)
 class ExplorationGroupComponent implements Component {
 	private cachedWidth?: number;
 	private cachedLines?: string[];
+	private expanded = false;
 
 	constructor(
 		private readonly groupId: string,
 		private readonly theme: any,
 	) {}
+
+	setExpanded(value: boolean): void {
+		if (this.expanded === value) return;
+		this.expanded = value;
+		this.invalidate();
+	}
 
 	invalidate(): void {
 		this.cachedWidth = undefined;
@@ -299,7 +343,7 @@ class ExplorationGroupComponent implements Component {
 			.sort((a, b) => a.index - b.index)
 			.map((call) => call.activity);
 		const active = group.calls.some((call) => call.status === "pending");
-		this.cachedLines = renderExploration(activities, active, this.theme, maxWidth);
+		this.cachedLines = renderExploration(activities, active, this.theme, maxWidth, { expanded: this.expanded });
 		this.cachedWidth = maxWidth;
 		return this.cachedLines;
 	}
@@ -369,11 +413,15 @@ function groupForCall(toolCallId: string): ExplorationGroup | undefined {
 	return groupId ? state.groups.get(groupId) : undefined;
 }
 
-function finishCall(toolCallId: string, isError: boolean): ExplorationCall | undefined {
+function finishCall(toolCallId: string, isError: boolean, outcome?: { summary?: string; output?: string }): ExplorationCall | undefined {
 	const group = groupForCall(toolCallId);
 	const call = group?.calls.find((item) => item.toolCallId === toolCallId);
 	if (!group || !call) return undefined;
 	call.status = isError ? "error" : "done";
+	if (outcome) {
+		call.activity.summary = outcome.summary?.trim() || undefined;
+		call.activity.output = outcome.output?.trim() || undefined;
+	}
 	notifyGroup(group);
 	return call;
 }
@@ -394,7 +442,13 @@ function markerFrom(value: any): ExplorationMarker | undefined {
 	if (typeof marker.toolCallId !== "string" || typeof marker.toolName !== "string") return undefined;
 	if (!Number.isInteger(marker.index) || !marker.activity || typeof marker.activity.detail !== "string") return undefined;
 	if (marker.activity.verb !== "Read" && marker.activity.verb !== "List" && marker.activity.verb !== "Search") return undefined;
+	if (marker.activity.summary !== undefined && typeof marker.activity.summary !== "string") return undefined;
 	return marker as ExplorationMarker;
+}
+
+function persistentActivity(activity: Activity): Activity {
+	const { output: _output, ...persisted } = activity;
+	return persisted;
 }
 
 function markerForCall(group: ExplorationGroup, call: ExplorationCall, isError: boolean): ExplorationMarker {
@@ -405,9 +459,47 @@ function markerForCall(group: ExplorationGroup, call: ExplorationCall, isError: 
 		index: call.index,
 		toolCallId: call.toolCallId,
 		toolName: call.toolName,
-		activity: { ...call.activity },
+		activity: persistentActivity(call.activity),
 		isError,
 	};
+}
+
+function textFromToolResult(result: any): string {
+	const content = result?.content ?? result?.partialResult?.content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+		.map((part: any) => part.text)
+		.join("\n");
+}
+
+function explorationResultOutput(toolName: string, result: any): string | undefined {
+	if (toolName !== "grep") return undefined;
+	const text = textFromToolResult(result).replace(/\s+$/, "");
+	return text || undefined;
+}
+
+function explorationResultSummary(toolName: string, result: any): string | undefined {
+	if (toolName !== "grep") return undefined;
+	const summary = grepMatchSummaryFromResult(result);
+	return summary ? formatPlainGrepMatchSummary(summary) : undefined;
+}
+
+function updateRenderedOutcome(group: ExplorationGroup, toolCallId: string, toolName: string, result: any): void {
+	const call = group.calls.find((item) => item.toolCallId === toolCallId);
+	if (!call) return;
+	const summary = explorationResultSummary(toolName, result)?.trim() || undefined;
+	const output = explorationResultOutput(toolName, result)?.trim() || undefined;
+	let changed = false;
+	if (summary !== undefined && call.activity.summary !== summary) {
+		call.activity.summary = summary;
+		changed = true;
+	}
+	if (output !== undefined && call.activity.output !== output) {
+		call.activity.output = output;
+		changed = true;
+	}
+	if (changed) notifyGroup(group);
 }
 
 function upsertPersistedMarker(marker: ExplorationMarker): ExplorationGroup {
@@ -443,7 +535,11 @@ function upsertPersistedMarker(marker: ExplorationMarker): ExplorationGroup {
 			call.toolName = marker.toolName;
 			changed = true;
 		}
-		if (call.activity.verb !== marker.activity.verb || call.activity.detail !== marker.activity.detail) {
+		if (
+			call.activity.verb !== marker.activity.verb ||
+			call.activity.detail !== marker.activity.detail ||
+			call.activity.summary !== marker.activity.summary
+		) {
 			call.activity = { ...marker.activity };
 			changed = true;
 		}
@@ -542,8 +638,9 @@ function restorePersistedGroups(entries: readonly any[]): void {
 	}
 }
 
-function leaderComponent(group: ExplorationGroup, theme: any, context: any): Component {
+function leaderComponent(group: ExplorationGroup, theme: any, context: any, expanded = false): Component {
 	group.component ??= new ExplorationGroupComponent(group.id, theme);
+	group.component.setExpanded(expanded);
 	if (typeof context?.invalidate === "function") group.requestRender = () => context.invalidate();
 	return group.component;
 }
@@ -590,7 +687,8 @@ export function renderExplorationResult(
 	const marker = markerFrom(result?.details);
 	const group = groupForCall(toolCallId) ?? (marker ? upsertPersistedMarker(marker) : undefined);
 	if (!group) return undefined;
-	return group.leaderId === toolCallId ? leaderComponent(group, theme, context) : new Container();
+	updateRenderedOutcome(group, toolCallId, toolName, result);
+	return group.leaderId === toolCallId ? leaderComponent(group, theme, context, options?.expanded ?? false) : new Container();
 }
 
 export function resetExplorationStateForTests(): void {
@@ -631,7 +729,9 @@ export default function (pi: ExtensionAPI) {
 		if (!registry().rendererEnabled || !isExplorationTool(event.toolName)) return;
 		const group = groupForCall(event.toolCallId)
 			?? ensureLiveCall(event.toolCallId, event.toolName, event.input);
-		const call = finishCall(event.toolCallId, Boolean(event.isError));
+		const summary = explorationResultSummary(event.toolName, event);
+		const output = explorationResultOutput(event.toolName, event);
+		const call = finishCall(event.toolCallId, Boolean(event.isError), { summary, output });
 		if (!group || !call) return;
 		const details = event.details && typeof event.details === "object" ? event.details : {};
 		return {

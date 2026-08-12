@@ -460,16 +460,12 @@ const messages = [
   "Slop forking open source...",
 ];
 
-function pickRandom(): string {
+export function pickWhimsicalMessage(): string {
   return messages[Math.floor(Math.random() * messages.length)]!;
 }
 
-export default function (pi: ExtensionAPI) {
-  pi.on("turn_start", async (_event, ctx) => {
-    ctx.ui.setWorkingMessage(pickRandom());
-  });
-
-  pi.on("turn_end", async (_event, ctx) => {
-    ctx.ui.setWorkingMessage(); // Reset for next time
-  });
-}
+/**
+ * Phrase library for the working row. Display is owned by `working-timer`,
+ * which combines a picked phrase with the elapsed timer.
+ */
+export default function (_pi: ExtensionAPI) {}
