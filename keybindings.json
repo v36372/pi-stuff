@@ -8,7 +8,7 @@
   "app.model.cycleForward": [],
   "app.session.togglePath": [],
   "app.session.toggleSort": [],
-  "app.models.save": "shift+t",
+  "app.models.save": "ctrl+shift+t",
   "app.models.clearAll": [],
   "app.models.toggleProvider": []
 }
