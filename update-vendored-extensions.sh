@@ -40,6 +40,11 @@ LOVELY_FILES=(
 	show-context.ts
 	show-sysprompt.ts
 )
+SSWEENS_REPO="https://github.com/ssweens/pi-packages.git"
+SSWEENS_REF="main"
+SSWEENS_PACKAGES=(
+	pi-multi-pass
+)
 
 usage() {
 	printf 'Usage: %s [--dry-run]\n' "$(basename "$0")"
@@ -75,6 +80,9 @@ for extension in "${RICHARD_EXTENSIONS[@]}"; do
 	targets+=("extensions/$extension")
 done
 targets+=("extensions/inspect-diagnostics")
+for package in "${SSWEENS_PACKAGES[@]}"; do
+	targets+=("extensions/$package")
+done
 
 if [[ "$dry_run" == false ]]; then
 	changes="$(git -C "$repo_root" status --short -- "${targets[@]}")"
@@ -92,11 +100,13 @@ git clone --quiet --depth 1 --branch "$KAUSH_REF" "$KAUSH_REPO" "$temp_dir/kaush
 git clone --quiet --depth 1 --branch "$NO_ANSI_REF" "$NO_ANSI_REPO" "$temp_dir/no-ansi"
 git clone --quiet --depth 1 --branch "$RICHARD_REF" "$RICHARD_REPO" "$temp_dir/richard"
 git clone --quiet --depth 1 --branch "$LOVELY_REF" "$LOVELY_REPO" "$temp_dir/lovely"
+git clone --quiet --depth 1 --branch "$SSWEENS_REF" "$SSWEENS_REPO" "$temp_dir/ssweens"
 angristan_commit="$(git -C "$temp_dir/angristan" rev-parse --short HEAD)"
 kaush_commit="$(git -C "$temp_dir/kaush" rev-parse --short HEAD)"
 no_ansi_commit="$(git -C "$temp_dir/no-ansi" rev-parse --short HEAD)"
 richard_commit="$(git -C "$temp_dir/richard" rev-parse --short HEAD)"
 lovely_commit="$(git -C "$temp_dir/lovely" rev-parse --short HEAD)"
+ssweens_commit="$(git -C "$temp_dir/ssweens" rev-parse --short HEAD)"
 
 for extension in "${ANGRISTAN_EXTENSIONS[@]}"; do
 	source_dir="$temp_dir/angristan/extensions/$extension"
@@ -131,6 +141,13 @@ preset_zod_version="$(node -p "require('$temp_dir/richard/extensions/preset/pack
 for file in "${LOVELY_FILES[@]}"; do
 	if [[ ! -f "$temp_dir/lovely/extensions/lovely-dev-tools/$file" ]]; then
 		printf 'Missing lovely-dev-tools file: %s\n' "$file" >&2
+		exit 1
+	fi
+done
+for package in "${SSWEENS_PACKAGES[@]}"; do
+	source_dir="$temp_dir/ssweens/$package"
+	if [[ ! -d "$source_dir" ]]; then
+		printf 'Missing upstream package: %s\n' "$package" >&2
 		exit 1
 	fi
 done
@@ -187,6 +204,14 @@ for file in "${LOVELY_FILES[@]}"; do
 		"$repo_root/extensions/inspect-diagnostics/$file"
 done
 rsync "${rsync_args[@]}" "$temp_dir/lovely/LICENSE" "$repo_root/extensions/inspect-diagnostics/LICENSE"
+
+printf '\n%s@%s\n' "$SSWEENS_REPO" "$ssweens_commit"
+for package in "${SSWEENS_PACKAGES[@]}"; do
+	printf '\n[%s]\n' "$package"
+	rsync "${rsync_args[@]}" \
+		"$temp_dir/ssweens/$package/" \
+		"$repo_root/extensions/$package/"
+done
 
 if [[ "$dry_run" == false ]]; then
 	printf '\nUpdated files:\n'

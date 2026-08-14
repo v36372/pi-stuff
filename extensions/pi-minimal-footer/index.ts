@@ -41,7 +41,7 @@ interface GitCache {
 // ============ Usage Cache ============
 
 const USAGE_REFRESH_INTERVAL = 5 * 60_000; // 5 minutes
-const usageCache = new Map<string, UsageSnapshot>(); // keyed by provider
+const usageCache = new Map<string, UsageSnapshot>(); // keyed by exact model provider/account
 
 // ============ Env Flags ============
 
@@ -142,6 +142,11 @@ function getEmailPrefixFromJwt(token: string): string | null {
   return prefix || null;
 }
 
+function getAccountIdFromJwt(token: string): string | undefined {
+  const accountId = decodeJwtPayload(token)?.["https://api.openai.com/auth"]?.chatgpt_account_id;
+  return typeof accountId === "string" && accountId ? accountId : undefined;
+}
+
 // ============ Auth Loading ============
 
 function loadAuthJson(): Record<string, any> {
@@ -219,13 +224,29 @@ function getCopilotToken(): string | undefined {
   return auth["github-copilot"]?.refresh;
 }
 
-function getCodexToken(): { token: string; accountId?: string } | undefined {
-  const auth = loadAuthJson();
-  if (auth["openai-codex"]?.access) {
-    return { token: auth["openai-codex"].access, accountId: auth["openai-codex"]?.accountId };
+async function getCodexToken(
+  providerKey: string,
+  ctx?: any,
+): Promise<{ token: string; accountId?: string } | undefined> {
+  try {
+    const resolved = await ctx?.modelRegistry?.getProviderAuth?.(providerKey);
+    const token = resolved?.auth?.apiKey;
+    if (typeof token === "string" && token) {
+      const accountHeader = Object.entries(resolved.auth.headers ?? {}).find(
+        ([name, value]) => name.toLowerCase() === "chatgpt-account-id" && typeof value === "string",
+      )?.[1] as string | undefined;
+      return { token, accountId: accountHeader || getAccountIdFromJwt(token) };
+    }
+  } catch {}
+
+  const entry = loadAuthJson()[providerKey];
+  if (entry?.access) {
+    return { token: entry.access, accountId: entry.accountId || getAccountIdFromJwt(entry.access) };
   }
 
-  // Fallback: ~/.codex/auth.json
+  // The Codex CLI fallback belongs only to the built-in account, never a numbered subscription.
+  if (providerKey !== "openai-codex") return undefined;
+
   const codexPath = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json");
   try {
     if (existsSync(codexPath)) {
@@ -488,8 +509,8 @@ async function fetchCopilotUsage(): Promise<UsageSnapshot> {
   }
 }
 
-async function fetchCodexUsage(): Promise<UsageSnapshot> {
-  const creds = getCodexToken();
+async function fetchCodexUsage(modelProvider: string, ctx?: any): Promise<UsageSnapshot> {
+  const creds = await getCodexToken(modelProvider, ctx);
   if (!creds) {
     return { provider: "Codex", windows: [], error: "no-auth", fetchedAt: Date.now() };
   }
@@ -965,15 +986,20 @@ const PROVIDER_MAP: Record<string, string> = {
 };
 
 function detectProvider(modelProvider: string): string | null {
+  if (/^openai-codex-\d+$/.test(modelProvider)) return "codex";
   return PROVIDER_MAP[modelProvider] || null;
 }
 
-async function fetchUsageForProvider(provider: string, ctx?: any): Promise<UsageSnapshot> {
+async function fetchUsageForProvider(
+  provider: string,
+  modelProvider: string,
+  ctx?: any,
+): Promise<UsageSnapshot> {
   switch (provider) {
     case "claude":
       return fetchClaudeUsage();
     case "codex":
-      return fetchCodexUsage();
+      return fetchCodexUsage(modelProvider, ctx);
     case "copilot":
       return fetchCopilotUsage();
     case "gemini":
@@ -1280,7 +1306,7 @@ export default function (pi: ExtensionAPI) {
 
   // Track usage state for rendering
   let latestUsage: UsageSnapshot | null = null;
-  let activeProvider: string | null = null; // internal provider key for the current model
+  let activeProvider: string | null = null; // exact model provider/account
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let usageContext: any = null;
 
@@ -1296,8 +1322,8 @@ export default function (pi: ExtensionAPI) {
    *  changed while the fetch was in flight. */
   function fetchUsage(modelProvider: string, ctx?: any): void {
     if (ctx) usageContext = ctx;
-    const provider = detectProvider(modelProvider);
-    if (!provider) {
+    const usageProvider = detectProvider(modelProvider);
+    if (!usageProvider) {
       activeProvider = null;
       latestUsage = null;
       stopRefreshTimer();
@@ -1305,19 +1331,19 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    activeProvider = provider;
+    activeProvider = modelProvider;
 
     // Show cached data immediately if available; otherwise clear the previous provider.
-    const cached = usageCache.get(provider);
+    const cached = usageCache.get(modelProvider);
     latestUsage = cached && cached.windows.length > 0 ? cached : null;
     tuiRef?.requestRender();
 
     // Fetch fresh in background — keep cached data on transient errors
-    fetchUsageForProvider(provider, usageContext)
+    fetchUsageForProvider(usageProvider, modelProvider, usageContext)
       .then((u) => {
-        if (!u || activeProvider !== provider) return;
+        if (!u || activeProvider !== modelProvider) return;
         if (u.windows.length === 0 && u.error && cached?.windows.length) return;
-        usageCache.set(provider, u);
+        usageCache.set(modelProvider, u);
         latestUsage = u;
         tuiRef?.requestRender();
       })
@@ -1329,13 +1355,15 @@ export default function (pi: ExtensionAPI) {
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(() => {
       if (activeProvider) {
-        const provider = activeProvider;
-        const cached = usageCache.get(provider);
-        fetchUsageForProvider(provider, usageContext)
+        const modelProvider = activeProvider;
+        const usageProvider = detectProvider(modelProvider);
+        if (!usageProvider) return;
+        const cached = usageCache.get(modelProvider);
+        fetchUsageForProvider(usageProvider, modelProvider, usageContext)
           .then((u) => {
-            if (!u || activeProvider !== provider) return;
+            if (!u || activeProvider !== modelProvider) return;
             if (u.windows.length === 0 && u.error && cached?.windows.length) return;
-            usageCache.set(provider, u);
+            usageCache.set(modelProvider, u);
             latestUsage = u;
             tuiRef?.requestRender();
           })

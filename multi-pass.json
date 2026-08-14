@@ -1,0 +1,12 @@
+{
+  "subscriptions": [
+    {
+      "provider": "openai-codex",
+      "index": 2,
+      "label": "hyper"
+    }
+  ],
+  "pools": [],
+  "chains": [],
+  "presets": []
+}
