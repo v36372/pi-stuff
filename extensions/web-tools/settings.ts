@@ -1,28 +1,67 @@
 import {
+	parsePublicHttpUrl,
+	type PublicHttpUrl,
 	type SearchDepth,
 	type SearchProviderName,
 	type WebFetchFormat,
 	type WebToolsSettings,
 } from "./types.ts";
 
-const FETCH_DEFAULT_FORMAT_VALUES = ["markdown", "text", "html"] as const satisfies readonly WebFetchFormat[];
-const SEARCH_PROVIDER_VALUES = ["exa"] as const satisfies readonly SearchProviderName[];
-const SEARCH_DEFAULT_DEPTH_VALUES = ["auto", "fast", "deep"] as const satisfies readonly SearchDepth[];
+export const WEB_FETCH_FORMATS = ["markdown", "text", "html"] as const satisfies readonly WebFetchFormat[];
+export const SEARCH_DEPTHS = ["auto", "fast", "deep"] as const satisfies readonly SearchDepth[];
+export const SEARCH_PROVIDERS = ["exa", "parallel"] as const satisfies readonly SearchProviderName[];
+
+export const FETCH_TIMEOUT_SECONDS = {
+	default: 30,
+	min: 1,
+	max: 120,
+} as const;
+
+export const SEARCH_TIMEOUT_SECONDS = {
+	default: 25,
+	min: 1,
+	max: 120,
+} as const;
+
+export const SEARCH_MAX_RESULTS = {
+	default: 8,
+	min: 1,
+	max: 20,
+} as const;
+
+export const FETCH_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+export const FETCH_MAX_REDIRECTS = 5;
+
+export type ToolInputParseError =
+	| { readonly _tag: "InvalidToolInput"; readonly message: string }
+	| { readonly _tag: "InvalidToolField"; readonly field: string; readonly message: string }
+	| { readonly _tag: "UnknownToolField"; readonly field: string };
 
 const DEFAULTS = {
 	fetchDefaultFormat: "markdown",
-	fetchTimeoutSeconds: 30,
-	fetchMaxResponseMB: 5,
+	fetchTimeoutSeconds: FETCH_TIMEOUT_SECONDS.default,
+	fetchMaxResponseBytes: FETCH_MAX_RESPONSE_BYTES,
 	fetchBlockPrivateHosts: true,
-	fetchMaxRedirects: 5,
+	fetchMaxRedirects: FETCH_MAX_REDIRECTS,
 	fetchFallbackUserAgent: "opencode",
-	searchEnabled: true,
 	searchProvider: "exa",
 	searchEndpoint: "https://mcp.exa.ai/mcp",
-	searchTimeoutSeconds: 25,
-	searchDefaultMaxResults: 8,
+	searchTimeoutSeconds: SEARCH_TIMEOUT_SECONDS.default,
+	searchDefaultMaxResults: SEARCH_MAX_RESULTS.default,
 	searchDefaultDepth: "auto",
 } as const;
+
+/** Clamp a finite number to an inclusive integer range. */
+export function clampInteger(
+	value: number,
+	bounds: { readonly min: number; readonly max: number; readonly fallback: number },
+): number {
+	if (!Number.isFinite(value)) {
+		return bounds.fallback;
+	}
+
+	return Math.max(bounds.min, Math.min(bounds.max, Math.round(value)));
+}
 
 export function parseOnOff(value: string | undefined, fallback: boolean): boolean {
 	if (!value) return fallback;
@@ -54,28 +93,56 @@ export function parseEnumSetting<T extends string>(
 	return allowed.includes(normalized) ? normalized : fallback;
 }
 
-export function getWebToolsSettings(): WebToolsSettings {
-	const fetchDefaultFormat = parseEnumSetting(undefined, FETCH_DEFAULT_FORMAT_VALUES, DEFAULTS.fetchDefaultFormat);
-	const searchProvider = parseEnumSetting(undefined, SEARCH_PROVIDER_VALUES, DEFAULTS.searchProvider);
-	const searchDefaultDepth = parseEnumSetting(undefined, SEARCH_DEFAULT_DEPTH_VALUES, DEFAULTS.searchDefaultDepth);
+export const EXA_ENDPOINT_ENVIRONMENT_VARIABLE = "PI_WEB_TOOLS_EXA_ENDPOINT";
+export const SEARCH_PROVIDER_ENVIRONMENT_VARIABLE = "PI_WEB_TOOLS_SEARCH_PROVIDER";
+export const PARALLEL_ENDPOINT_ENVIRONMENT_VARIABLE = "PI_WEB_TOOLS_PARALLEL_ENDPOINT";
+
+/** Return web fetch settings that do not depend on search provider configuration. */
+export function getWebFetchSettings(): WebToolsSettings["fetch"] {
+	return {
+		defaultFormat: DEFAULTS.fetchDefaultFormat,
+		timeoutSeconds: DEFAULTS.fetchTimeoutSeconds,
+		maxResponseBytes: DEFAULTS.fetchMaxResponseBytes,
+		blockPrivateHosts: DEFAULTS.fetchBlockPrivateHosts,
+		maxRedirects: DEFAULTS.fetchMaxRedirects,
+		fallbackUserAgent: DEFAULTS.fetchFallbackUserAgent,
+	};
+}
+
+/** Parse search provider settings from the process environment. */
+export function getWebSearchSettings(
+	environment: Readonly<Record<string, string | undefined>> = process.env,
+): WebToolsSettings["search"] {
+	const provider = parseEnumSetting(
+		environment[SEARCH_PROVIDER_ENVIRONMENT_VARIABLE],
+		SEARCH_PROVIDERS,
+		DEFAULTS.searchProvider,
+	);
+	const endpointVariable = provider === "parallel"
+		? PARALLEL_ENDPOINT_ENVIRONMENT_VARIABLE
+		: EXA_ENDPOINT_ENVIRONMENT_VARIABLE;
+	const endpoint = environment[endpointVariable]?.trim()
+		|| (provider === "exa" ? DEFAULTS.searchEndpoint : undefined);
+	if (!endpoint?.trim()) {
+		throw new Error(`Pi Web Tools configuration error: ${endpointVariable} is required for websearch`);
+	}
 
 	return {
-		fetch: {
-			defaultFormat: fetchDefaultFormat,
-			timeoutSeconds: DEFAULTS.fetchTimeoutSeconds,
-			maxResponseBytes: DEFAULTS.fetchMaxResponseMB * 1024 * 1024,
-			blockPrivateHosts: DEFAULTS.fetchBlockPrivateHosts,
-			maxRedirects: DEFAULTS.fetchMaxRedirects,
-			fallbackUserAgent: DEFAULTS.fetchFallbackUserAgent,
-		},
-		search: {
-			enabled: DEFAULTS.searchEnabled,
-			provider: searchProvider,
-			endpoint: DEFAULTS.searchEndpoint,
-			apiKey: process.env.EXA_API_KEY,
-			timeoutSeconds: DEFAULTS.searchTimeoutSeconds,
-			defaultMaxResults: DEFAULTS.searchDefaultMaxResults,
-			defaultDepth: searchDefaultDepth,
-		},
+		enabled: true,
+		provider,
+		endpoint: parseSearchEndpoint(endpoint, endpointVariable),
+		timeoutSeconds: DEFAULTS.searchTimeoutSeconds,
+		defaultMaxResults: DEFAULTS.searchDefaultMaxResults,
+		defaultDepth: DEFAULTS.searchDefaultDepth,
 	};
+}
+
+function parseSearchEndpoint(input: string, environmentVariable: string): PublicHttpUrl {
+	const parsed = parsePublicHttpUrl(input);
+	if (parsed._tag === "err") {
+		throw new Error(
+			`Pi Web Tools configuration error: ${environmentVariable} must be a public HTTP or HTTPS URL`,
+		);
+	}
+	return parsed.value;
 }

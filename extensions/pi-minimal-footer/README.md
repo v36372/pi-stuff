@@ -31,6 +31,7 @@ Minimal footer for [pi](https://github.com/earendil-works/pi) that replaces the 
 | Kimi Coding    | 5h + weekly rolling windows (Plan)                     |
 | OpenCode Go    | Rolling + weekly + monthly subscription quotas          |
 | Grok           | SuperGrok included-credit usage + reset time             |
+| Cursor         | Included plan + Auto/API usage + billing-cycle reset     |
 
 ## Install
 
@@ -51,6 +52,7 @@ Environment variables (all optional):
 | `OPENCODE_GO_AUTH_COOKIE`        | OpenCode dashboard `auth` cookie                         | —       |
 | `GROK_CLI_OAUTH_TOKEN`           | Optional Grok OAuth bearer override                      | —       |
 | `XAI_OAUTH_TOKEN`                | Alternate Grok OAuth bearer override                     | —       |
+| `CURSOR_USAGE_SESSION_TOKEN`     | Optional Cursor dashboard session-token fallback         | —       |
 
 Accepted false values: `0`, `false`, `no`, `off` (case-insensitive).
 
@@ -58,9 +60,11 @@ OpenCode Go quota is not exposed by its API key today. To enable its usage bars,
 
 Grok usage works with OAuth subscription providers using the `xai-auth`, `grok-cli`, or `xai-oauth` provider ID. The optional environment token overrides take precedence; otherwise the footer asks pi's model registry for a current token, then falls back to the matching entry in `~/.pi/agent/auth.json` or `~/.grok/auth.json`. xAI API keys do not expose the SuperGrok subscription meter.
 
+Cursor usage is enabled for the `cursor` provider registered by `@rahularya01/pi-cursor`. The footer follows that package's credential sources (`CURSOR_ACCESS_TOKEN`, Cursor CLI Keychain, Cursor IDE state, then Pi OAuth) and calls Cursor's native current-period usage endpoint. `CURSOR_USAGE_SESSION_TOKEN` is used only as a fallback.
+
 ## How it works
 
-The footer reads context usage from the last assistant message's token counts (free — comes with every LLM response). Session totals (`↑` input, `↓` output, `R` cache read, optional `W` cache write, `CH%` cache hit rate, `$` cost) are summed across all assistant messages in the session and appended to the status line. Subscription usage is fetched from each provider's dedicated quota API using your existing auth tokens from `~/.pi/agent/auth.json` or environment variables.
+The footer reads context usage from the last assistant message's token counts (free — comes with every LLM response). Session totals (`↑` input, `↓` output, `R` cache read, optional `W` cache write, `CH%` cache hit rate, `$` cost) are summed across all assistant messages in the session and appended to the status line. Subscription usage is fetched from each provider's dedicated quota API using your existing provider credentials.
 
 Usage is fetched:
 

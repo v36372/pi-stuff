@@ -5,7 +5,7 @@
  * Auto-detects provider from current model and shows relevant usage.
  *
  * Supports: Claude Max, Codex, Copilot, Gemini, MiniMax Token Plan, Kimi Coding,
- * OpenCode Go, and Grok subscriptions.
+ * OpenCode Go, Grok, and Cursor subscriptions.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -15,6 +15,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { fetchCursorPlanUsage } from "./cursor-usage.ts";
 
 // ============ Types ============
 
@@ -968,6 +969,38 @@ async function fetchGrokUsage(ctx?: any): Promise<UsageSnapshot> {
   }
 }
 
+async function fetchCursorUsage(): Promise<UsageSnapshot> {
+  const usage = await fetchCursorPlanUsage();
+  if (!usage) {
+    return { provider: "Cursor", windows: [], error: "no-auth", fetchedAt: Date.now() };
+  }
+
+  const resetsIn = usage.billingCycleEnd
+    ? formatResetTime(new Date(usage.billingCycleEnd))
+    : undefined;
+  const windows: RateWindow[] = [];
+  for (const [label, usedPercent] of [
+    ["Plan", usage.totalPercentUsed],
+    ["Auto", usage.autoPercentUsed],
+    ["API", usage.apiPercentUsed],
+  ] as const) {
+    if (usedPercent !== undefined) {
+      windows.push({
+        label,
+        usedPercent: clampPercent(usedPercent),
+        resetsIn: label === "Plan" ? resetsIn : undefined,
+      });
+    }
+  }
+
+  return {
+    provider: "Cursor",
+    windows,
+    error: windows.length > 0 ? undefined : "no-usage-data",
+    fetchedAt: Date.now(),
+  };
+}
+
 // ============ Provider Detection ============
 
 // Map pi provider names to our internal usage provider keys
@@ -983,6 +1016,7 @@ const PROVIDER_MAP: Record<string, string> = {
   "xai-auth": "grok", // pi-xai-oauth / SuperGrok subscription
   "grok-cli": "grok", // pi-grok-cli / SuperGrok subscription
   "xai-oauth": "grok", // compatible xAI OAuth provider id
+  cursor: "cursor", // @rahularya01/pi-cursor subscription
 };
 
 function detectProvider(modelProvider: string): string | null {
@@ -1014,6 +1048,8 @@ async function fetchUsageForProvider(
       return fetchOpenCodeGoUsage();
     case "grok":
       return fetchGrokUsage(ctx);
+    case "cursor":
+      return fetchCursorUsage();
     default:
       return { provider: "Unknown", windows: [], error: "unknown-provider", fetchedAt: Date.now() };
   }

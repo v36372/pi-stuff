@@ -32,6 +32,7 @@
   },
   "files": [
     "index.ts",
+    "cursor-usage.ts",
     "assets/claude.png",
     "assets/codex.png",
     "README.md",

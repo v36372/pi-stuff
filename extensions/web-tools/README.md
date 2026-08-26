@@ -1,11 +1,32 @@
-# web-tools
+# Pi Web Tools
 
-Pi extension that registers two public-web tools:
+A [Pi](https://pi.dev) package that adds tools for fetching and searching the public web.
 
-- `webfetch` — fetch one public URL as markdown, text, html, or an inline raster image
-- `websearch` — search the public web for current information and candidate URLs
+- `webfetch` fetches one public URL as Markdown, text, raw HTML, or an inline raster image.
+- `websearch` searches the public web through an Exa or Parallel MCP-compatible endpoint.
 
-Both tools are inactive while an `openai-codex` model is selected because that provider has its own web tooling. Switching to another provider restores whichever web tools were active before the switch.
+## Install
+
+Install globally from GitHub:
+
+```bash
+pi install git:github.com/dmmulroy/pi-web-tools
+```
+
+Or select Parallel:
+
+```bash
+export PI_WEB_TOOLS_SEARCH_PROVIDER="parallel"
+export PI_WEB_TOOLS_PARALLEL_ENDPOINT="https://your-parallel-endpoint.example/mcp"
+```
+
+Try it for one Pi invocation without installing:
+
+```bash
+pi -e git:github.com/dmmulroy/pi-web-tools
+```
+
+Pi packages execute with your full system permissions. Review package source before installation.
 
 ## Tools
 
@@ -13,109 +34,67 @@ Both tools are inactive while an `openai-codex` model is selected because that p
 
 Parameters:
 
-- `url` — required
-- `format` — optional: `markdown`, `text`, `html`
+- `url` — required HTTP or HTTPS URL
+- `format` — optional: `markdown`, `text`, or `html`
 - `timeout` — optional timeout in seconds, clamped to `1..120`
 
-Current defaults:
+Defaults and behavior:
 
-- `defaultFormat`: `markdown`
-- `timeoutSeconds`: `30`
-- `maxResponseBytes`: `5 MB`
-- `blockPrivateHosts`: `true`
-- `maxRedirects`: `5`
-- `fallbackUserAgent`: `opencode`
-
-Behavior notes:
-
-- only `http://` and `https://` URLs are supported
-- private/local hosts and IPs are blocked by default
-- raster images (`png`, `jpeg`, `gif`, `webp`) are returned inline as images
-- HTML is converted to markdown or text when requested
-- binary content is rejected
-- if a site returns `403` with `cf-mitigated: challenge`, the tool retries with the fallback user agent
+- returns Markdown by default
+- blocks private and local hosts and IP addresses
+- follows at most five redirects
+- rejects URL credentials and unsupported binary content
+- returns PNG, JPEG, GIF, and WebP images inline
+- limits responses to 5 MB
+- retries Cloudflare challenge responses with a browser-like fallback user agent
 
 ### `websearch`
 
 Parameters:
 
-- `query` — required
-- `maxResults` — optional, clamped to `1..20`
-- `depth` — optional: `auto`, `fast`, `deep` (`deep` is accepted as a compatibility alias and mapped to `fast`)
+- `query` — required search query
+- `maxResults` — optional result count, clamped to `1..20`
+- `depth` — optional: `auto`, `fast`, or `deep`; `deep` is accepted as a compatibility alias for `fast`
 
-Current defaults:
+Defaults and behavior:
 
-- `enabled`: `true`
-- `provider`: `exa`
-- `endpoint`: `https://mcp.exa.ai/mcp`
-- `apiKey`: from `EXA_API_KEY` env var (no key = free tier with rate limits)
-- `timeoutSeconds`: `25`
-- `defaultMaxResults`: `8`
-- `defaultDepth`: `auto`
-
-Behavior notes:
-
-- uses the Exa MCP endpoint
-- Exa currently supports provider depths `auto` and `fast`; tool input `deep` is downgraded to `fast`
-- search responses are limited to `1 MB`
-- without an API key, Exa applies free-tier rate limits (2 QPS, 50 requests/day); set `EXA_API_KEY` to remove limits
-- provider requests currently send:
-  - `livecrawl: "fallback"`
-  - `contextMaxCharacters: 2000`
+- returns up to eight results
+- defaults to Exa and optionally supports Parallel
+- limits provider responses to 1 MB
+- truncates large tool output and saves the complete output to a temporary file
 
 ## Configuration
 
-The extension has an internal settings shape:
+`websearch` uses Exa's public MCP endpoint by default, so no configuration is required:
 
-```ts
-{
-  fetch: {
-    defaultFormat: "markdown" | "text" | "html";
-    timeoutSeconds: number;
-    maxResponseBytes: number;
-    blockPrivateHosts: boolean;
-    maxRedirects: number;
-    fallbackUserAgent: string;
-  };
-  search: {
-    enabled: boolean;
-    provider: "exa";
-    endpoint: string;
-    apiKey?: string;
-    timeoutSeconds: number;
-    defaultMaxResults: number;
-    defaultDepth: "auto" | "fast" | "deep";
-  };
-}
+```text
+https://mcp.exa.ai/mcp
 ```
 
-But in the current implementation, these are hardcoded defaults in `settings.ts`.
-
-That means:
-
-- `webfetch.format` and `webfetch.timeout` can be overridden per call
-- `websearch.maxResults` and `websearch.depth` can be overridden per call
-- the underlying defaults are not currently exposed through Pi settings, extension settings, or env vars
-
-### Setting your Exa API key
-
-Get an API key at [dashboard.exa.ai/api-keys](https://dashboard.exa.ai/api-keys) and export it in your shell environment:
+Set `PI_WEB_TOOLS_EXA_ENDPOINT` to override it with another public HTTP or HTTPS Exa MCP-compatible endpoint:
 
 ```bash
-export EXA_API_KEY=exa-...
-pi
+export PI_WEB_TOOLS_EXA_ENDPOINT="https://your-exa-endpoint.example/mcp"
 ```
 
-When set, the key is sent as an `Authorization: Bearer` header to the Exa MCP endpoint, bypassing the free-tier rate limits (2 QPS, 50 requests/day). Without it, anonymous requests are rate-limited but still work for light usage.
+To use Parallel instead:
 
-To change the defaults, edit:
+```bash
+export PI_WEB_TOOLS_SEARCH_PROVIDER="parallel"
+export PI_WEB_TOOLS_PARALLEL_ENDPOINT="https://your-parallel-endpoint.example/mcp"
+```
 
-- `home/.pi/agent/extensions/web-tools/settings.ts`
+`webfetch` does not require these variables. Per-call arguments can override `webfetch.format`, `webfetch.timeout`, `websearch.maxResults`, and `websearch.depth`.
 
-## Source of truth
+## Development
 
-- extension entry: `home/.pi/agent/extensions/web-tools/index.ts`
-- settings/defaults: `home/.pi/agent/extensions/web-tools/settings.ts`
-- fetch tool: `home/.pi/agent/extensions/web-tools/webfetch.ts`
-- search tool: `home/.pi/agent/extensions/web-tools/websearch.ts`
-- Exa provider: `home/.pi/agent/extensions/web-tools/providers/exa.ts`
+Requires Node.js 22.19 or newer.
+
+```bash
+npm install
+npm run check
+```
+
+## License
+
+[MIT](./LICENSE)

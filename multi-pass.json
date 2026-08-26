@@ -26,5 +26,22 @@
   ],
 >>>>>>> 53f00df5 (chore: cleanup after strongdm migration)
   "chains": [],
-  "presets": []
+  "presets": [
+    {
+      "name": "dev",
+      "entries": [
+        {
+          "provider": "openai-codex",
+          "model": "gpt-5.6-sol",
+          "enabled": true
+        },
+        {
+          "provider": "openai-codex-2",
+          "model": "gpt-5.6-sol",
+          "enabled": true
+        }
+      ],
+      "enabled": true
+    }
+  ]
 }

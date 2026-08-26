@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+	EXA_ENDPOINT_ENVIRONMENT_VARIABLE,
+	PARALLEL_ENDPOINT_ENVIRONMENT_VARIABLE,
+	SEARCH_PROVIDER_ENVIRONMENT_VARIABLE,
+	getWebFetchSettings,
+	getWebSearchSettings,
 	parseEnumSetting,
 	parseIntegerSetting,
 	parseOnOff,
@@ -24,4 +29,51 @@ test("parseEnumSetting validates allowed values", () => {
 	assert.equal(parseEnumSetting("markdown", ["markdown", "text", "html"], "text"), "markdown");
 	assert.equal(parseEnumSetting("pdf", ["markdown", "text", "html"], "text"), "text");
 	assert.equal(parseEnumSetting(undefined, ["markdown", "text", "html"], "text"), "text");
+});
+
+test("web fetch settings do not require Exa configuration", () => {
+	assert.equal(getWebFetchSettings().defaultFormat, "markdown");
+});
+
+test("web search settings parse the Exa endpoint environment variable", () => {
+	const settings = getWebSearchSettings({
+		[EXA_ENDPOINT_ENVIRONMENT_VARIABLE]: "https://example.test/mcp",
+	});
+
+	assert.equal(settings.endpoint, "https://example.test/mcp");
+});
+
+test("web search settings parse Parallel provider configuration", () => {
+	const settings = getWebSearchSettings({
+		[SEARCH_PROVIDER_ENVIRONMENT_VARIABLE]: "parallel",
+		[PARALLEL_ENDPOINT_ENVIRONMENT_VARIABLE]: "https://example.test/parallel",
+	});
+
+	assert.equal(settings.provider, "parallel");
+	assert.equal(settings.endpoint, "https://example.test/parallel");
+});
+
+test("web search settings default to the public Exa endpoint", () => {
+	const settings = getWebSearchSettings({});
+
+	assert.equal(settings.provider, "exa");
+	assert.equal(settings.endpoint, "https://mcp.exa.ai/mcp");
+});
+
+test("web search settings require a configured Parallel endpoint", () => {
+	assert.throws(
+		() => getWebSearchSettings({ [SEARCH_PROVIDER_ENVIRONMENT_VARIABLE]: "parallel" }),
+		new Error(
+			`Pi Web Tools configuration error: ${PARALLEL_ENDPOINT_ENVIRONMENT_VARIABLE} is required for websearch`,
+		),
+	);
+});
+
+test("web search settings reject invalid Exa endpoints without exposing their value", () => {
+	assert.throws(
+		() => getWebSearchSettings({ [EXA_ENDPOINT_ENVIRONMENT_VARIABLE]: "not-a-url" }),
+		new Error(
+			`Pi Web Tools configuration error: ${EXA_ENDPOINT_ENVIRONMENT_VARIABLE} must be a public HTTP or HTTPS URL`,
+		),
+	);
 });
