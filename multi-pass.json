@@ -3,10 +3,28 @@
     {
       "provider": "openai-codex",
       "index": 2,
+<<<<<<< HEAD
       "label": "hyper"
     }
   ],
   "pools": [],
+=======
+      "label": "just9n"
+    }
+  ],
+  "pools": [
+    {
+      "name": "personal",
+      "baseProvider": "openai-codex",
+      "members": [
+        "openai-codex",
+        "openai-codex-2"
+      ],
+      "enabled": true,
+      "strategy": "quota-first"
+    }
+  ],
+>>>>>>> 53f00df5 (chore: cleanup after strongdm migration)
   "chains": [],
   "presets": []
 }
