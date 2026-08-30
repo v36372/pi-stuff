@@ -3,45 +3,20 @@
     {
       "provider": "openai-codex",
       "index": 2,
-<<<<<<< HEAD
       "label": "hyper"
-    }
-  ],
-  "pools": [],
-=======
-      "label": "just9n"
     }
   ],
   "pools": [
     {
-      "name": "personal",
+      "name": "codex",
       "baseProvider": "openai-codex",
       "members": [
-        "openai-codex",
-        "openai-codex-2"
+        "openai-codex"
       ],
       "enabled": true,
       "strategy": "quota-first"
     }
   ],
->>>>>>> 53f00df5 (chore: cleanup after strongdm migration)
   "chains": [],
-  "presets": [
-    {
-      "name": "dev",
-      "entries": [
-        {
-          "provider": "openai-codex",
-          "model": "gpt-5.6-sol",
-          "enabled": true
-        },
-        {
-          "provider": "openai-codex-2",
-          "model": "gpt-5.6-sol",
-          "enabled": true
-        }
-      ],
-      "enabled": true
-    }
-  ]
+  "presets": []
 }
