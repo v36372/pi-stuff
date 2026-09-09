@@ -3,6 +3,7 @@ name: session-recall
 description: Searches and analyzes past Pi coding sessions on demand. Use when the user asks what happened in a previous conversation, what was decided or changed earlier, how an old problem was solved, or to find a prior session. Also use for phrases such as "remember when", "last time", "previous session", and "what did we decide".
 license: MIT; see LICENSE
 compatibility: Requires Python 3.10+ and ripgrep (rg). Reads ~/.pi/agent/sessions.
+disable-model-invocation: true
 ---
 
 # Session Recall

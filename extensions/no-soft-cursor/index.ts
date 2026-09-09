@@ -82,6 +82,7 @@ export default function (pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 
 		const ui = ctx.ui as PatchableUI;
+		const previousEditorFactory = ctx.ui.getEditorComponent();
 		if (!ui[UI_PATCHED]) {
 			const originalSetEditorComponent = ui.setEditorComponent.bind(ui);
 			ui.setEditorComponent = (factory: EditorFactory | undefined) =>
@@ -89,8 +90,10 @@ export default function (pi: ExtensionAPI) {
 			ui[UI_PATCHED] = true;
 		}
 
-		ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-			patchEditorRender(new CustomEditor(tui, theme, keybindings)),
-		);
+		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+			const editor = previousEditorFactory?.(tui, theme, keybindings) ??
+				new CustomEditor(tui, theme, keybindings);
+			return patchEditorRender(editor);
+		});
 	});
 }
