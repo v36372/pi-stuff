@@ -1,0 +1,33 @@
+{
+  "lastChangelogVersion": "0.87.1",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "hideThinkingBlock": false,
+  "defaultThinkingLevel": "xhigh",
+  "theme": "ghostty-sync-62fe2a74",
+  "collapseChangelog": true,
+  "enabledModels": [
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna",
+    "openai-codex/gpt-6-sol",
+    "openai-codex-2/gpt-6-sol",
+    "claude-bridge/claude-opus-5-5",
+    "skymavis-litellm/claude-opus-4-8"
+  ],
+  "quietStartup": false,
+  "doubleEscapeAction": "tree",
+  "treeFilterMode": "no-tools",
+  "extensions": [
+    "-extensions/exedev/index.ts",
+    "-extensions/web-tools/index.ts"
+  ],
+  "skills": [],
+  "enableInstallTelemetry": false,
+  "packages": [
+    "npm:@howaboua/pi-codex-conversion",
+    "https://github.com/joelhooks/pi-claude-bridge"
+  ],
+  "pi-codex-fast": {
+    "enabled": true
+  }
+}
