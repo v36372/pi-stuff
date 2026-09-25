@@ -3,12 +3,12 @@
     {
       "provider": "openai-codex",
       "index": 2,
-      "label": "hyper"
+      "label": "tin"
     }
   ],
   "pools": [
     {
-      "name": "codex",
+      "name": "gpt",
       "baseProvider": "openai-codex",
       "members": [
         "openai-codex"
