@@ -4,7 +4,7 @@
   "defaultModel": "gpt-5.6-sol",
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "xhigh",
-  "theme": "ghostty-sync-62fe2a74",
+  "theme": "modern-dark",
   "collapseChangelog": true,
   "enabledModels": [
     "openai-codex/gpt-6-luna",
