@@ -12,7 +12,8 @@
     "openai-codex/gpt-6-sol",
     "openai-codex-2/gpt-6-sol",
     "claude-bridge/claude-opus-5-5",
-    "skymavis-litellm/claude-opus-4-8"
+    "cerebras/gpt-oss-120b",
+    "cerebras/qwen-3.8-27b"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
@@ -25,7 +26,9 @@
   "packages": [
     "npm:@howaboua/pi-codex-conversion",
     "https://github.com/joelhooks/pi-claude-bridge",
-    "https://github.com/hjanuschka/pi-multi-pass"
+    "https://github.com/hjanuschka/pi-multi-pass",
+    "https://github.com/joelhooks/pi-until",
+    "npm:pi-blackhole"
   ],
   "pi-codex-fast": {
     "enabled": true
