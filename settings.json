@@ -18,14 +18,14 @@
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
   "extensions": [
-    "-extensions/exedev/index.ts",
-    "-extensions/web-tools/index.ts"
+    "-extensions/exedev/index.ts"
   ],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
     "npm:@howaboua/pi-codex-conversion",
-    "https://github.com/joelhooks/pi-claude-bridge"
+    "https://github.com/joelhooks/pi-claude-bridge",
+    "https://github.com/hjanuschka/pi-multi-pass"
   ],
   "pi-codex-fast": {
     "enabled": true
