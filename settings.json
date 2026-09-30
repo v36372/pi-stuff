@@ -19,18 +19,14 @@
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
   "extensions": [
-    "-extensions/exedev/index.ts"
+    "-extensions/exedev/index.ts",
+    "extensions/pi-until/extensions/pi-until.ts"
   ],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
-    "npm:@howaboua/pi-codex-conversion",
     "https://github.com/joelhooks/pi-claude-bridge",
     "https://github.com/hjanuschka/pi-multi-pass",
-    "https://github.com/joelhooks/pi-until",
     "npm:pi-blackhole"
-  ],
-  "pi-codex-fast": {
-    "enabled": true
-  }
+  ]
 }
