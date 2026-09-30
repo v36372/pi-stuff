@@ -1,7 +1,10 @@
 {
-  "lastChangelogVersion": "0.87.1",
+  "lastChangelogVersion": "0.99.1",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
+  "defaultTools": [
+    "+codemode"
+  ],
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "xhigh",
   "theme": "modern-dark",
@@ -9,11 +12,11 @@
   "enabledModels": [
     "openai-codex/gpt-6-luna",
     "openai-codex-2/gpt-6-luna",
-    "openai-codex/gpt-6-sol",
-    "openai-codex-2/gpt-6-sol",
     "claude-bridge/claude-opus-5-5",
     "cerebras/gpt-oss-120b",
-    "cerebras/qwen-3.8-27b"
+    "cerebras/qwen-3.8-27b",
+    "openai-codex/gpt-6.1-sol",
+    "openai-codex-2/gpt-6.1-sol"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
@@ -28,5 +31,15 @@
     "https://github.com/joelhooks/pi-claude-bridge",
     "https://github.com/hjanuschka/pi-multi-pass",
     "npm:pi-blackhole"
-  ]
+  ],
+  "modelThinkingLevels": {
+    "openai-codex/gpt-5.6-sol": "high",
+    "openai-codex/gpt-6-luna": "high",
+    "claude-bridge/claude-opus-5-5": "max",
+    "openai-codex/gpt-6.1-sol": "high"
+  },
+  "pi-codex-fast": {
+    "enabled": true,
+    "mode": "fast"
+  }
 }
