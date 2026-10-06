@@ -16,7 +16,8 @@
     "cerebras/gpt-oss-120b",
     "cerebras/qwen-3.8-27b",
     "openai-codex/gpt-6.1-sol",
-    "openai-codex-2/gpt-6.1-sol"
+    "openai-codex-2/gpt-6.1-sol",
+    "gx10-tensorfold/Qwen3.8-Flash-Next"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
