@@ -15,7 +15,8 @@ Minimal footer for [pi](https://github.com/earendil-works/pi) that replaces the 
 - **Session title** — display name from `auto-session-name` / `/name`, on the first row after CWD/git
 - **Session stats** — cumulative session totals in pi's default style (`↑50k ↓14k R340k CH90.1% $0.357`)
 - **Subscription usage bars** — rolling window quotas with reset timers for supported providers
-- **Auto-refresh** — fetches usage on startup and model switch, then every 5 minutes
+- **Auto-refresh** — checks every 30 seconds, fetches only when the 5-minute cache expires, and keeps reset countdowns live
+- **Shared usage cache** — credential-scoped disk cache avoids duplicate requests across Pi instances; failed requests preserve the last successful snapshot and honor `Retry-After`
 - **Git integration** — branch name, dirty state, ahead/behind counts
 
 ## Supported providers
@@ -48,6 +49,7 @@ Environment variables (all optional):
 | `PI_MINIMAL_FOOTER_SHOW_CWD`    | Show current working directory in footer status line     | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_BRANCH` | Show git branch/dirty/ahead/behind in footer status line | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_TITLE`  | Show session display name on the row under CWD           | `1`     |
+| `PI_MINIMAL_FOOTER_SHOW_PROVIDER` | Include provider prefix in the model label               | `0`     |
 | `OPENCODE_GO_WORKSPACE_ID`       | OpenCode Go workspace ID (`wrk_...`)                     | —       |
 | `OPENCODE_GO_AUTH_COOKIE`        | OpenCode dashboard `auth` cookie                         | —       |
 | `GROK_CLI_OAUTH_TOKEN`           | Optional Grok OAuth bearer override                      | —       |
@@ -66,11 +68,13 @@ Cursor usage is enabled for the `cursor` provider registered by `@rahularya01/pi
 
 The footer reads context usage from the last assistant message's token counts (free — comes with every LLM response). Session totals (`↑` input, `↓` output, `R` cache read, optional `W` cache write, `CH%` cache hit rate, `$` cost) are summed across all assistant messages in the session and appended to the status line. Subscription usage is fetched from each provider's dedicated quota API using your existing provider credentials.
 
-Usage is fetched:
+Usage is checked:
 
 - Once on startup
 - Immediately on model switch (Ctrl+P)
-- Every 5 minutes after that
+- Every 30 seconds; a network refresh happens only when the shared 5-minute cache expires
+
+Successful quota snapshots are shared between Pi instances in `~/.pi/agent/pi-minimal-footer/`, keyed by a SHA-256 credential fingerprint (the credentials themselves are not written). Cache files are private to the current user and pruned after 24 hours. HTTP errors retain the previous successful values; rate limits honor `Retry-After` where provided.
 
 Git state is refreshed:
 
@@ -84,12 +88,12 @@ The footer adapts to narrow terminals by stacking lines vertically instead of th
 
 ### Claude Max usage bar not showing
 
-Anthropic's OAuth usage endpoint (`/api/oauth/usage`) has been returning persistent 429 (rate limit) errors since late March 2026, affecting all third-party tools that display Claude usage data (CodexBar, oh-my-claudecode, claude-pulse, etc.). This is an Anthropic-side issue — tracked in [claude-code#30930](https://github.com/anthropics/claude-code/issues/30930) and [claude-code#31021](https://github.com/anthropics/claude-code/issues/31021). The usage bar will start working again once Anthropic fixes the endpoint.
+Anthropic's OAuth usage endpoint (`/api/oauth/usage`) may return 429s. The footer sends the Claude Code User-Agent and honors the server's `Retry-After`; if the endpoint continues to rate-limit, the last successful cached quota remains visible for up to an hour.
 
 ## Notes
 
 - Replaces the default pi footer entirely via `ctx.ui.setFooter()`
-- Auth tokens are read from `~/.pi/agent/auth.json` (populated by `/login`) or standard env vars (`ANTHROPIC_API_KEY`, `MINIMAX_API_KEY`, etc.)
+- Auth tokens are read from Pi's agent directory `auth.json` (default `~/.pi/agent/auth.json`, populated by `/login`) or standard env vars (`ANTHROPIC_API_KEY`, `MINIMAX_API_KEY`, etc.)
 - OpenCode Go uses its dashboard page because the API-key usage endpoint is not publicly available; its cookie is sent only to `https://opencode.ai`
 - Grok subscription usage uses the unofficial OAuth billing surface at `https://cli-chat-proxy.grok.com`; the endpoint may change
 - Providers without auth simply don't show a usage bar — no errors
