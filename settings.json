@@ -24,15 +24,16 @@
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
   "extensions": [
-    "-extensions/exedev/index.ts",
-    "extensions/pi-until/extensions/pi-until.ts"
+    "-extensions/exedev/index.ts"
   ],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
     "https://github.com/joelhooks/pi-claude-bridge",
+    "https://github.com/joelhooks/pi-until",
     "https://github.com/hjanuschka/pi-multi-pass",
-    "npm:pi-blackhole"
+    "npm:@ff-labs/pi-fff",
+    "npm:pi-web-access"
   ],
   "modelThinkingLevels": {
     "openai-codex/gpt-5.6-sol": "high",
