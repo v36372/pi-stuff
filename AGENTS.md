@@ -1,5 +1,3 @@
-# AGENTS.md
-
 **Everything you emit must carry load.** Produce the minimum that fully works — in the code you write, in the shape of your reply, in each sentence — and cut what carries nothing. The minimum is complete, never negligent: load-bearing material (safety, validation, the answer itself) is never cut.
 
 One principle, applied at three layers. Where the layers converge, the rule is stated once.
