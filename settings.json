@@ -17,7 +17,8 @@
     "cerebras/qwen-3.8-27b",
     "openai-codex/gpt-6.1-sol",
     "openai-codex-2/gpt-6.1-sol",
-    "gx10-cyberfrost/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw"
+    "gx10/Qwen3.8-Flash-Next",
+    "gx10/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
