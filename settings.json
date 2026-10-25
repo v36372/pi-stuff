@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.3.0",
+  "lastChangelogVersion": "1.4.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
   "defaultTools": [
@@ -18,7 +18,9 @@
     "openai-codex/gpt-6.1-sol",
     "openai-codex-2/gpt-6.1-sol",
     "gx10/Qwen3.8-Flash-Next",
-    "gx10/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw"
+    "gx10/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw",
+    "openai-codex/gpt-6-astra",
+    "openai-codex-2/gpt-6-astra"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
