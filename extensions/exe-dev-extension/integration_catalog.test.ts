@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   discoverIntegrationCatalogs,
+  fetchJSONWithTimeout,
   integrationPromptAvailabilityLabel,
   providerInfosFromIntegrationCatalogs,
   type Catalog,
@@ -9,6 +10,20 @@ import {
 } from "./integration_catalog.ts";
 
 const reflectionURL = "https://reflection.int.exe.xyz/integrations";
+
+async function withStubbedFetch<T>(impl: typeof globalThis.fetch, fn: () => Promise<T>): Promise<T> {
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = impl;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = oldFetch;
+  }
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
 
 function openAIGPTModel(mode: "managed" | "chatgpt") {
   return {
@@ -155,6 +170,56 @@ test("returns no integrations when reflection has no attached llm", async () => 
 
   assert.equal(discovered.found, false);
   assert.deepEqual(discovered.integrations, []);
+});
+
+test("retries once when the first fetch attempt fails", async () => {
+  let attempts = 0;
+  const catalog = await withStubbedFetch(
+    async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("The operation timed out.");
+      return jsonResponse({ schema_version: 1, models: [] });
+    },
+    () => fetchJSONWithTimeout("https://alpha.int.exe.xyz/models.json", 10),
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(catalog, { schema_version: 1, models: [] });
+});
+
+test("surfaces the failure when the retried fetch also fails", async () => {
+  let attempts = 0;
+  await withStubbedFetch(
+    async () => {
+      attempts++;
+      throw new Error(`attempt ${attempts} timed out`);
+    },
+    async () => {
+      await assert.rejects(
+        fetchJSONWithTimeout("https://alpha.int.exe.xyz/models.json", 10),
+        /attempt 2 timed out/,
+      );
+    },
+  );
+
+  assert.equal(attempts, 2);
+});
+
+// An HTTP response means the endpoint answered: probing base URL candidates
+// 404s by design, and retrying those would double discovery latency on the
+// path the retry exists to keep fast.
+test("does not retry a fetch the server answered with an error status", async () => {
+  let attempts = 0;
+  const catalog = await withStubbedFetch(
+    async () => {
+      attempts++;
+      return jsonResponse({ error: "not found" }, 404);
+    },
+    () => fetchJSONWithTimeout("https://alpha.int.exe.xyz/models.json", 10),
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(catalog, undefined);
 });
 
 test("namespaces reflected xAI models and never creates routes from pricing metadata", () => {
@@ -394,7 +459,7 @@ test("preserves reflected catalog model order for provider configs", () => {
             input: ["text"],
             contextWindow: 128000,
             maxTokens: 32000,
-            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2, cacheWrite1h: 0.4 },
           },
           {
             id: "claude-fable-5",
@@ -468,4 +533,133 @@ test("formats prompt integration availability with at most two names", () => {
   assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha"]), "alpha, beta");
   assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha", "gamma"]), "alpha, beta, ...");
   assert.equal(integrationPromptAvailabilityLabel(["beta", "alpha", "beta", "gamma"]), "alpha, beta, ...");
+});
+
+// A GPT-6 model reflected by the integration carries no reasoning metadata of
+// its own; the thinking-level range must come from the bundled pricing catalog
+// and survive onto the aliased provider model. Before issue #323 the extension
+// dropped it, so pi fell back to off..high and hid xhigh/max.
+function gpt6IntegrationModel(nativeID: string, name: string) {
+  return {
+    id: `openai/${nativeID}`,
+    name,
+    provider: "openai",
+    native_id: nativeID,
+    apis: ["openai_responses"],
+    limits: { context_window: 1050000, max_output_tokens: 128000 },
+    architecture: { input_modalities: ["text", "image"] },
+    exe_dev: { mode: "chatgpt" },
+  };
+}
+
+function gpt6PricingCatalog(models: Catalog["providers"][number]["models"]): Catalog {
+  return {
+    schemaVersion: 1,
+    providers: [{ id: "openai", path: "openai/v1", api: "openai-responses", models }],
+  };
+}
+
+test("forwards the authoritative thinking-level map onto aliased gpt-6 models", () => {
+  const astraMap = { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const solMap = { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const pricing = gpt6PricingCatalog([
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      type: "chat",
+      reasoning: true,
+      thinkingLevelMap: astraMap,
+      input: ["text", "image"],
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    },
+    {
+      id: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      type: "chat",
+      reasoning: true,
+      thinkingLevelMap: solMap,
+      input: ["text", "image"],
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    },
+  ]);
+
+  const infos = providerInfosFromIntegrationCatalogs(
+    [
+      {
+        name: "llm",
+        baseURL: "https://llm.int.exe.xyz",
+        catalog: {
+          schema_version: 1,
+          models: [gpt6IntegrationModel("gpt-6-astra", "GPT-6 Astra"), gpt6IntegrationModel("gpt-6-sol", "GPT-6 Sol")],
+        },
+      },
+    ],
+    pricing,
+    (message) => assert.fail(`unexpected warning: ${message}`),
+  );
+
+  const openai = infos.get("exe-dev-openai");
+  assert.ok(openai);
+  const byId = new Map(openai.config.models?.map((m) => [m.id, m]));
+
+  const astra = byId.get("gpt-6-astra@llm");
+  assert.ok(astra);
+  assert.equal(astra.reasoning, true);
+  assert.deepEqual(astra.thinkingLevelMap, astraMap);
+
+  const sol = byId.get("gpt-6-sol@llm");
+  assert.ok(sol);
+  assert.deepEqual(sol.thinkingLevelMap, solMap);
+});
+
+test("sanitizes stray thinking-level keys and non-string values", () => {
+  const consoleWarnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => consoleWarnings.push(args.join(" "));
+  const pricing = gpt6PricingCatalog([
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      type: "chat",
+      reasoning: true,
+      thinkingLevelMap: {
+        low: "low",
+        xhigh: "xhigh",
+        off: null,
+        bogus: "nope",
+        high: 7 as unknown as string,
+      },
+      input: ["text", "image"],
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+    },
+  ]);
+
+  let astra;
+  try {
+    const infos = providerInfosFromIntegrationCatalogs(
+      [
+        {
+          name: "llm",
+          baseURL: "https://llm.int.exe.xyz",
+          catalog: { schema_version: 1, models: [gpt6IntegrationModel("gpt-6-astra", "GPT-6 Astra")] },
+        },
+      ],
+      pricing,
+      (message) => assert.fail(`unexpected integration warning: ${message}`),
+    );
+    astra = infos.get("exe-dev-openai")?.config.models?.[0];
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.ok(astra);
+  assert.deepEqual(astra.thinkingLevelMap, { low: "low", xhigh: "xhigh", off: null });
+  assert.ok(consoleWarnings.some((w) => /unknown thinking level "bogus"/.test(w)));
+  assert.ok(consoleWarnings.some((w) => /invalid thinking level value for "high"/.test(w)));
 });
