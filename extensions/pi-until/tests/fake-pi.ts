@@ -1,0 +1,358 @@
+import type {
+  CustomEntry,
+  ExtensionAPI,
+  ExtensionContext,
+  MessageStartEvent,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
+import { vi } from "vitest";
+
+import piUntil from "../extensions/pi-until.ts";
+import type { PiUntilOptions, WatchReceipt } from "../extensions/pi-until.ts";
+import type { UntilParameters } from "../src/command.ts";
+import type { TelemetryEventInput } from "../src/telemetry.ts";
+
+export type UntilToolParams = UntilParameters;
+
+export interface UntilToolResult {
+  content: { type: "text"; text: string }[];
+  details?: WatchReceipt | { watches: WatchReceipt[] };
+}
+
+/** The single-watch receipt from start/status/cancel results. */
+export const receiptOf = (result: UntilToolResult): WatchReceipt => {
+  if (result.details === undefined || "watches" in result.details) {
+    throw new Error("expected a single watch receipt");
+  }
+  return result.details;
+};
+
+export type UntilToolExecute = (
+  toolCallId: string,
+  params: UntilToolParams,
+  signal: AbortSignal,
+  onUpdate: undefined,
+  context: ExtensionContext
+) => Promise<UntilToolResult>;
+
+export interface SentMessage {
+  readonly message: {
+    customType: string;
+    content: string;
+    details?: unknown;
+    display?: boolean;
+  };
+  readonly options?: { deliverAs?: string; triggerTurn?: boolean };
+}
+
+export interface EmittedEvent {
+  readonly channel: string;
+  readonly data: unknown;
+}
+
+export type StartReason = "startup" | "reload" | "new" | "resume" | "fork";
+export type ShutdownReason = "quit" | "reload" | "new" | "resume" | "fork";
+export type SessionEvent =
+  | { type: "session_start"; reason: StartReason }
+  | { type: "session_shutdown"; reason: ShutdownReason }
+  | { type: "agent_start" }
+  | { type: "agent_settled" }
+  | { type: "session_before_compact"; reason: CompactReason }
+  | { type: "session_compact"; reason: CompactReason }
+  | { type: "session_compact_failed"; reason: CompactReason }
+  | MessageStartEvent;
+export type CompactReason = "manual" | "threshold" | "overflow";
+
+type SessionHandler = (
+  event: SessionEvent,
+  ctx: ExtensionContext
+) => Promise<void> | void;
+
+/**
+ * A fake Pi session that persists custom entries the way the real
+ * SessionManager does, so several extension instances can share one session
+ * across a simulated `/reload`.
+ */
+export class FakeSession {
+  readonly entries: SessionEntry[] = [];
+  readonly id = `session-${Math.random().toString(36).slice(2, 8)}`;
+  readonly createdAt: string;
+
+  constructor(createdAt = new Date(Date.now() - 60_000).toISOString()) {
+    this.createdAt = createdAt;
+  }
+
+  /** Copy every entry into a new session, as `pi --fork <file>` does. */
+  fork(): FakeSession {
+    const forked = new FakeSession(new Date().toISOString());
+    forked.entries.push(...this.entries);
+    return forked;
+  }
+
+  appendCustom(
+    customType: string,
+    data: CustomEntry["data"],
+    timestamp = new Date().toISOString()
+  ): void {
+    this.entries.push({
+      customType,
+      data,
+      id: `e${this.entries.length + 1}`,
+      parentId: null,
+      timestamp,
+      type: "custom",
+    });
+  }
+
+  appendUserMessage(text: string): void {
+    this.entries.push({
+      id: `e${this.entries.length + 1}`,
+      message: { content: text, role: "user", timestamp: Date.now() },
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      type: "message",
+    });
+  }
+
+  context(
+    overrides: Partial<{
+      idle: boolean;
+      mode: string;
+      notify: ReturnType<typeof vi.fn>;
+    }> = {}
+  ) {
+    const notify = overrides.notify ?? vi.fn();
+    const setWidget = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      isIdle: () => overrides.idle ?? true,
+      mode: overrides.mode ?? "tui",
+      sessionManager: {
+        getBranch: () => [...this.entries],
+        getHeader: () => ({
+          cwd: process.cwd(),
+          id: this.id,
+          timestamp: this.createdAt,
+          type: "session",
+        }),
+        getLeafId: () => this.entries.at(-1)?.id ?? "origin-entry",
+        getSessionId: () => this.id,
+      },
+      ui: { notify, setWidget },
+    };
+    // SAFETY: the extension only touches cwd, mode, sessionManager.getBranch,
+    // getHeader, getLeafId, getSessionId, ui.notify, and ui.setWidget. Test doubles
+    // for the rest of ExtensionContext would be dead weight.
+    return { ctx: ctx as unknown as ExtensionContext, notify, setWidget };
+  }
+}
+
+export interface FakeExtension {
+  readonly acknowledgeMessage: (
+    index: number,
+    ctx: ExtensionContext
+  ) => Promise<void>;
+  readonly agentSettled: (ctx: ExtensionContext) => Promise<void>;
+  readonly agentStart: (ctx: ExtensionContext) => Promise<void>;
+  readonly appendEntry: ReturnType<typeof vi.fn>;
+  readonly compactionEnd: (
+    ctx: ExtensionContext,
+    options?: { failed?: boolean; reason?: CompactReason }
+  ) => Promise<void>;
+  readonly compactionStart: (
+    ctx: ExtensionContext,
+    reason?: CompactReason
+  ) => Promise<void>;
+  readonly commands: Map<
+    string,
+    (args: string, ctx: ExtensionContext) => Promise<void>
+  >;
+  readonly emitted: EmittedEvent[];
+  /** Deliver an event to the extension's `pi.events.on` listeners. */
+  readonly emitToExtension: (channel: string, data: unknown) => void;
+  readonly entries: { customType: string; data: CustomEntry["data"] }[];
+  readonly messages: SentMessage[];
+  readonly sendMessage: ReturnType<typeof vi.fn>;
+  readonly sessionStart: (
+    reason: StartReason,
+    ctx: ExtensionContext
+  ) => Promise<void>;
+  readonly shutdown: (
+    reason: ShutdownReason,
+    ctx?: ExtensionContext
+  ) => Promise<void>;
+  readonly telemetry: TelemetryEventInput[];
+  readonly tool: UntilToolExecute;
+}
+
+/** Instantiate the extension against a fake Pi bound to `session`. */
+interface FakeExtensionOptions extends PiUntilOptions {
+  readonly acknowledgeMessages?: boolean;
+  readonly sendMessageFailure?: Error;
+}
+
+export const loadExtension = (
+  session: FakeSession,
+  options: FakeExtensionOptions = {}
+): FakeExtension => {
+  const messages: SentMessage[] = [];
+  const entries: { customType: string; data: CustomEntry["data"] }[] = [];
+  const telemetry: TelemetryEventInput[] = [];
+  const commands = new Map<
+    string,
+    (args: string, ctx: ExtensionContext) => Promise<void>
+  >();
+  const handlers = new Map<string, SessionHandler>();
+  let tool: UntilToolExecute | undefined;
+  let lastContext = session.context().ctx;
+
+  const appendEntry = vi.fn((customType: string, data: CustomEntry["data"]) => {
+    entries.push({ customType, data });
+    session.appendCustom(customType, data);
+  });
+  const sendMessage = vi.fn(
+    (message: SentMessage["message"], sendOptions?: SentMessage["options"]) => {
+      if (options.sendMessageFailure !== undefined) {
+        throw options.sendMessageFailure;
+      }
+      messages.push({ message, options: sendOptions });
+      if (options.acknowledgeMessages !== false) {
+        queueMicrotask(() => {
+          void handlers.get("message_start")?.(
+            {
+              message: {
+                ...message,
+                display: message.display ?? true,
+                role: "custom",
+                timestamp: Date.now(),
+              },
+              type: "message_start",
+            },
+            lastContext
+          );
+        });
+      }
+    }
+  );
+
+  const emitted: EmittedEvent[] = [];
+  const listeners = new Map<string, Set<(data: unknown) => void>>();
+
+  const pi = {
+    appendEntry,
+    events: {
+      emit: (channel: string, data: unknown) => {
+        emitted.push({ channel, data });
+      },
+      on: (channel: string, listener: (data: unknown) => void) => {
+        const set = listeners.get(channel) ?? new Set();
+        set.add(listener);
+        listeners.set(channel, set);
+        return () => {
+          set.delete(listener);
+        };
+      },
+    },
+    on: vi.fn((event: string, handler: SessionHandler) => {
+      handlers.set(event, handler);
+    }),
+    registerCommand: vi.fn(
+      (
+        name: string,
+        definition: {
+          handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+        }
+      ) => {
+        commands.set(name, definition.handler);
+      }
+    ),
+    registerTool: vi.fn((definition: { execute: UntilToolExecute }) => {
+      tool = async (toolCallId, params, signal, onUpdate, context) => {
+        lastContext = context;
+        return definition.execute(
+          toolCallId,
+          params,
+          signal,
+          onUpdate,
+          context
+        );
+      };
+    }),
+    sendMessage,
+  };
+
+  // SAFETY: the extension uses only appendEntry, events.emit, events.on, on,
+  // registerCommand, registerTool, and sendMessage from ExtensionAPI.
+  piUntil(pi as unknown as ExtensionAPI, {
+    clock: options.clock,
+    compactionGraceMs: options.compactionGraceMs,
+    followUpDispatchAckMs: options.followUpDispatchAckMs,
+    telemetry: options.telemetry ?? {
+      enabled: true,
+      filePath: "memory",
+      record: async (_sessionId, event) => {
+        telemetry.push(event);
+      },
+    },
+  });
+
+  if (!tool) {
+    throw new Error("until tool was not registered");
+  }
+
+  const emit = async (event: SessionEvent, ctx: ExtensionContext) => {
+    lastContext = ctx;
+    await handlers.get(event.type)?.(event, ctx);
+  };
+  const shutdownContext = session.context().ctx;
+
+  return {
+    acknowledgeMessage: async (index, ctx) => {
+      const sent = messages[index];
+      if (sent === undefined) throw new Error(`unknown sent message: ${index}`);
+      await emit(
+        {
+          message: {
+            ...sent.message,
+            display: sent.message.display ?? true,
+            role: "custom",
+            timestamp: Date.now(),
+          },
+          type: "message_start",
+        },
+        ctx
+      );
+    },
+    agentSettled: (ctx) => emit({ type: "agent_settled" }, ctx),
+    agentStart: (ctx) => emit({ type: "agent_start" }, ctx),
+    appendEntry,
+    commands,
+    compactionEnd: (ctx, { failed = false, reason = "manual" } = {}) =>
+      emit(
+        {
+          reason,
+          type: failed ? "session_compact_failed" : "session_compact",
+        },
+        ctx
+      ),
+    compactionStart: (ctx, reason = "manual") =>
+      emit({ reason, type: "session_before_compact" }, ctx),
+    emitted,
+    emitToExtension: (channel, data) => {
+      for (const listener of listeners.get(channel) ?? []) listener(data);
+    },
+    entries,
+    messages,
+    sendMessage,
+    sessionStart: (reason, ctx) => emit({ reason, type: "session_start" }, ctx),
+    shutdown: (reason, ctx) =>
+      emit({ reason, type: "session_shutdown" }, ctx ?? shutdownContext),
+    telemetry,
+    tool,
+  };
+};
+
+export const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });

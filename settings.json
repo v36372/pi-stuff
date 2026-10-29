@@ -13,8 +13,6 @@
     "openai-codex/gpt-6-luna",
     "openai-codex-2/gpt-6-luna",
     "claude-bridge/claude-opus-5-5",
-    "cerebras/gpt-oss-120b",
-    "cerebras/qwen-3.8-27b",
     "openai-codex/gpt-6.1-sol",
     "openai-codex-2/gpt-6.1-sol",
     "gx10/Qwen3.8-Flash-Next",
@@ -25,7 +23,11 @@
     "openai-codex/gpt-6.1-terra",
     "openai-codex-2/gpt-6.1-terra",
     "openai-codex-2/gpt-6-astra",
-    "openai-codex/gpt-6-astra"
+    "openai-codex/gpt-6-astra",
+    "gx10-cyber-frost/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw",
+    "grok-cli/grok-composer-2.5-fast",
+    "grok-cli/grok-4.6",
+    "grok-cli/grok-4.7-build-fast"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
@@ -39,7 +41,8 @@
     "https://github.com/joelhooks/pi-claude-bridge",
     "https://github.com/hjanuschka/pi-multi-pass",
     "npm:@ff-labs/pi-fff",
-    "npm:pi-web-access"
+    "npm:pi-web-access",
+    "npm:pi-grok-cli"
   ],
   "modelThinkingLevels": {
     "openai-codex/gpt-5.6-sol": "high",
