@@ -1,0 +1,15 @@
+Shelley in-place compaction for Pi
+
+Portions adapted from Shelley, Copyright 2026 Bold Software, Inc.
+https://github.com/boldsoftware/shelley
+Commit: 2925edc4d57f033a298b783843e448371c252d6b
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Source: server/compact_in_place.go, server/inplace_compaction.go,
+server/context_estimate.go, server/idle_compaction.go,
+server/idle_nudge_prompt.txt, db/inplace_compaction.go,
+claudetool/compact_in_place.go, and their tests.
+
+Modifications: translated Go algorithm and prompts to TypeScript; adapted
+storage, message envelopes, IDs, lifecycle, and original-message retrieval
+to Pi's public extension API. No affiliation or endorsement is implied.
