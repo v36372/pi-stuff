@@ -25,7 +25,10 @@
   "quietStartup": false,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
-  "extensions": [],
+  "extensions": [
+    "-extensions/exedev/index.ts",
+    "-extensions/companion/index.ts"
+  ],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
