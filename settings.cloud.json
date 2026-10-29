@@ -1,0 +1,70 @@
+{
+  "lastChangelogVersion": "1.4.0",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultTools": [
+    "+codemode"
+  ],
+  "hideThinkingBlock": false,
+  "defaultThinkingLevel": "xhigh",
+  "theme": "modern-dark",
+  "collapseChangelog": true,
+  "enabledModels": [
+    "openai-codex/gpt-6-luna",
+    "openai-codex-2/gpt-6-luna",
+    "claude-bridge/claude-opus-5-5",
+    "cerebras/gpt-oss-120b",
+    "cerebras/qwen-3.8-27b",
+    "openai-codex/gpt-6.1-sol",
+    "openai-codex-2/gpt-6.1-sol",
+    "gx10/Qwen3.8-Flash-Next",
+    "gx10/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw",
+    "openai-codex/gpt-6-astra",
+    "openai-codex-2/gpt-6-astra",
+    "gx10-cyberfrost/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw",
+    "openai-codex/gpt-6.1-terra",
+    "openai-codex-2/gpt-6.1-terra",
+    "openai-codex-2/gpt-6-astra",
+    "openai-codex/gpt-6-astra"
+  ],
+  "quietStartup": false,
+  "doubleEscapeAction": "tree",
+  "treeFilterMode": "no-tools",
+  "extensions": [
+    "-extensions/exedev/index.ts",
+    "-extensions/accent-color/index.ts",
+    "-extensions/cat.ts",
+    "-extensions/code-blocks/index.ts",
+    "-extensions/hyperlinks/index.ts",
+    "-extensions/no-soft-cursor/index.ts",
+    "-extensions/overlay-stack/index.ts",
+    "-extensions/personal-hotkey/index.ts",
+    "-extensions/pi-minimal-footer/index.ts",
+    "-extensions/pi-quit-and-delete/index.ts",
+    "-extensions/pi-text-box/index.ts",
+    "-extensions/pi-up-history/src/index.ts",
+    "-extensions/pi-welcome-screen/src/index.ts",
+    "-extensions/turn-separator/index.ts",
+    "-extensions/turn-stats/index.ts",
+    "-extensions/whimsical.ts",
+    "-extensions/working-timer/index.ts"
+  ],
+  "skills": [],
+  "enableInstallTelemetry": false,
+  "packages": [
+    "https://github.com/joelhooks/pi-claude-bridge",
+    "https://github.com/hjanuschka/pi-multi-pass",
+    "npm:@ff-labs/pi-fff",
+    "npm:pi-web-access"
+  ],
+  "modelThinkingLevels": {
+    "openai-codex/gpt-5.6-sol": "high",
+    "openai-codex/gpt-6-luna": "high",
+    "claude-bridge/claude-opus-5-5": "max",
+    "openai-codex/gpt-6.1-sol": "high"
+  },
+  "pi-codex-fast": {
+    "enabled": true,
+    "mode": "fast"
+  }
+}
