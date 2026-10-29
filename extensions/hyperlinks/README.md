@@ -4,7 +4,8 @@ Render local file paths as clickable OSC 8 terminal hyperlinks, and expose the
 helper to other extensions.
 
 A path like `src/auth/middleware.ts` becomes a Cmd/Ctrl-clickable link that
-opens the file in your `$EDITOR`, without changing its visible width.
+opens the file using your terminal and system's file-handling settings, without
+changing its visible width. It does not select an editor or use `$EDITOR`.
 
 ## Commands
 

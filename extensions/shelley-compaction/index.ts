@@ -1,4 +1,4 @@
-// Shelley in-place compaction, ported as a Pi extension. See NOTICE / README.md.
+// Shelley in-place compaction, ported as a Pi extension. See attribution in core.ts.
 import type { ExtensionAPI, ExtensionContext, ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, generateBranchSummary } from "@earendil-works/pi-coding-agent";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai";

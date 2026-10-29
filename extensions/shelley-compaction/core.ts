@@ -1,5 +1,11 @@
-// Adapted from boldsoftware/shelley 2925edc4 (Apache-2.0).
-// See NOTICE for the source files. Pi entry IDs replace Shelley sequence IDs.
+// Portions adapted from Shelley, Copyright 2026 Bold Software, Inc.
+// https://github.com/boldsoftware/shelley/tree/2925edc4d57f033a298b783843e448371c252d6b
+// Licensed under Apache-2.0: https://www.apache.org/licenses/LICENSE-2.0
+// Translated Go algorithm and prompts to TypeScript; adapted storage, message
+// envelopes, IDs, lifecycle, and original-message retrieval to Pi's extension API.
+// Source: server/compact_in_place.go, server/inplace_compaction.go,
+// server/context_estimate.go, server/idle_compaction.go, server/idle_nudge_prompt.txt,
+// db/inplace_compaction.go, and claudetool/compact_in_place.go.
 import type { Message, ToolCall, Usage } from "@earendil-works/pi-ai";
 
 export const TOOL = "compact_in_place";
