@@ -1,10 +1,8 @@
 {
-  "lastChangelogVersion": "1.4.0",
+  "lastChangelogVersion": "1.5.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
-  "defaultTools": [
-    "+codemode"
-  ],
+  "defaultTools": ["+codemode"],
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "xhigh",
   "theme": "modern-dark",
@@ -23,9 +21,7 @@
   "quietStartup": false,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
-  "extensions": [
-    "-extensions/exedev/index.ts"
-  ],
+  "extensions": ["-extensions/exedev/index.ts"],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
@@ -44,5 +40,9 @@
   "pi-codex-fast": {
     "enabled": true,
     "mode": "fast"
+  },
+  "extensionChangelogVersions": {
+    "{\"source\":\"https://github.com/joelhooks/pi-claude-bridge\",\"scope\":\"user\"}": "0.9.3",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0"
   }
 }
