@@ -2,7 +2,9 @@
   "lastChangelogVersion": "1.6.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
-  "defaultTools": ["+codemode"],
+  "defaultTools": [
+    "+codemode"
+  ],
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "xhigh",
   "theme": "light",
@@ -26,14 +28,17 @@
   "quietStartup": false,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
-  "extensions": ["-extensions/exedev/index.ts"],
+  "extensions": [
+    "-extensions/exedev/index.ts"
+  ],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
     "https://github.com/joelhooks/pi-claude-bridge",
     "https://github.com/hjanuschka/pi-multi-pass",
     "npm:@ff-labs/pi-fff",
-    "npm:pi-grok-cli"
+    "npm:pi-grok-cli",
+    "git:github.com/dmmulroy/pi-web-tools"
   ],
   "modelThinkingLevels": {
     "openai-codex/gpt-5.6-sol": "high",
@@ -46,4 +51,3 @@
     "{\"source\":\"https://github.com/joelhooks/pi-claude-bridge\",\"scope\":\"user\"}": "0.9.3"
   }
 }
-
