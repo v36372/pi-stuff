@@ -2,49 +2,48 @@
   "lastChangelogVersion": "1.6.0",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
-  "defaultTools": [
-    "+codemode"
-  ],
+  "defaultTools": ["+codemode"],
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "xhigh",
-  "theme": "modern-dark",
+  "theme": "light",
   "collapseChangelog": true,
   "enabledModels": [
     "openai-codex-2/gpt-6-luna",
     "claude-bridge/claude-opus-5-5",
+    "cerebras/gpt-oss-120b",
+    "cerebras/qwen-3.8-27b",
+    "gx10-cyberfrost/CYBER-FROST-3.8-EXL3-SAGE-3.87bpw",
+    "openai-codex/gpt-6.1-terra",
     "openai-codex-2/gpt-6.1-terra",
     "grok-cli/grok-4.6",
+    "grok-cli/grok-composer-2.5-fast",
+    "openai-codex/gpt-6.2-sol",
+    "openai-codex/gpt-6.2-astra",
     "openai-codex-2/gpt-6.2-astra",
-    "google/gemini-4-neon",
-    "google/gemini-3.8-flash"
+    "openai-codex-2/gpt-6.2-sol",
+    "modal-inkling/inkling-2-mini"
   ],
   "quietStartup": false,
   "doubleEscapeAction": "tree",
   "treeFilterMode": "no-tools",
-  "extensions": [
-    "-extensions/exedev/index.ts"
-  ],
+  "extensions": ["-extensions/exedev/index.ts"],
   "skills": [],
   "enableInstallTelemetry": false,
   "packages": [
     "https://github.com/joelhooks/pi-claude-bridge",
     "https://github.com/hjanuschka/pi-multi-pass",
     "npm:@ff-labs/pi-fff",
-    "npm:pi-web-access",
     "npm:pi-grok-cli"
   ],
   "modelThinkingLevels": {
     "openai-codex/gpt-5.6-sol": "high",
     "openai-codex/gpt-6-luna": "high",
     "claude-bridge/claude-opus-5-5": "max",
-    "openai-codex/gpt-6.1-sol": "high"
-  },
-  "pi-codex-fast": {
-    "enabled": true,
-    "mode": "fast"
+    "openai-codex/gpt-6.1-sol": "high",
+    "modal-inkling/inkling-2-mini": "low"
   },
   "extensionChangelogVersions": {
-    "{\"source\":\"https://github.com/joelhooks/pi-claude-bridge\",\"scope\":\"user\"}": "0.9.3",
-    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0"
+    "{\"source\":\"https://github.com/joelhooks/pi-claude-bridge\",\"scope\":\"user\"}": "0.9.3"
   }
 }
+
